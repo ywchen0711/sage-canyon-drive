@@ -3,6 +3,9 @@ import * as THREE from '../lib/three.module.min.js';
 import { MAP } from './mapdata.js';
 import { ROADS, NODES, EDGES, ADJ, nearestRoad, terrainH, route, onEdge, edgePoint, LIMIT, MPH, clamp, lerp, HOUSES, ADDRESSED } from './roads.js';
 import { buildWorld, buildSky, addTempBox, addTempCircle, clearTemp } from './world.js';
+import { createCity, restorePermanent, PRICES, STARTER, HOME_MISSIONS } from './city.js';
+import { Walker } from './onfoot.js';
+import { createBigMap } from './bigmap.js';
 import { VEHICLES, buildVehicle, Driver, poseVehicle } from './car.js';
 import { createTraffic, updateSignals, lightFor, buildPerson, animPerson, buildDog, AICar } from './traffic.js';
 import { MISSIONS, FREE, STARS, SCHOOL_DROP, kerb, addr } from './missions.js';
@@ -11,7 +14,7 @@ import { audioInit, engineSound, engineOff, sfx, horn, sirenOn, jingleOn, say, s
 
 // ---------- save ----------
 const SAVE_KEY = 'sage-canyon-drive-v1';
-let save = { stars: {}, found: [], home: null, lang: 'zh', traffic: 1, tilt: false, quality: 1 };
+let save = { stars: {}, found: [], home: null, lang: 'zh', traffic: 1, tilt: false, quality: 1, money: 100, owned: ['suv', 'minivan', 'pizza'], paid: {} };
 try { Object.assign(save, JSON.parse(localStorage.getItem(SAVE_KEY) || '{}')); } catch (e) { }
 function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) { } }
 const T = (zh, en) => save.lang === 'zh' ? zh : en;
@@ -77,15 +80,21 @@ const stars3d = (() => {
 // ---------- player ----------
 let player = null, model = null, kind = 'suv';
 let headOn = false, headLight = null, headTarget = null;
-function spawnPlayer(k, x, z, h) {
-  if (model) scene.remove(model.root);
+const leftCars = [];   // cars you got out of: { d: Driver, model }
+const walker = new Walker(scene); walker.show(false);
+function attachLights() {
+  headLight = new THREE.SpotLight('#fff3d8', 0, 70, 0.55, 0.5, 1.2);
+  headLight.position.set(0, 1.0, VEHICLES[kind].L / 2); headTarget = new THREE.Object3D(); headTarget.position.set(0, -2, VEHICLES[kind].L / 2 + 25);
+  model.root.add(headLight, headTarget); headLight.target = headTarget;
+}
+function spawnPlayer(k, x, z, h, color) {
+  if (model && !leftCars.some(c => c.model === model)) scene.remove(model.root);
+  G.onFoot = false; walker.show(false);
   kind = k;
-  model = buildVehicle(k);
+  model = buildVehicle(k, color);
   scene.add(model.root);
   player = new Driver(k, x, z, h);
-  headLight = new THREE.SpotLight('#fff3d8', 0, 70, 0.55, 0.5, 1.2);
-  headLight.position.set(0, 1.0, VEHICLES[k].L / 2); headTarget = new THREE.Object3D(); headTarget.position.set(0, -2, VEHICLES[k].L / 2 + 25);
-  model.root.add(headLight, headTarget); headLight.target = headTarget;
+  attachLights();
   camState.init = false;
 }
 // a spot on the road: right-hand lane, facing along the road (closest to wanted heading)
@@ -222,6 +231,30 @@ function makeStaticCar(x, z, h) {
   addTempBox(x, z, VEHICLES[k].W, VEHICLES[k].L, -h + Math.PI / 2 - Math.PI / 2, 'parked');
 }
 
+// ---------- smoke from a damaged engine ----------
+const smokeTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d'); const gr = g.createRadialGradient(32, 32, 2, 32, 32, 30); gr.addColorStop(0, 'rgba(255,255,255,0.8)'); gr.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c); })();
+const puffs = [];
+for (let i = 0; i < 30; i++) { const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex, color: '#555', transparent: true, depthWrite: false, opacity: 0 })); s.visible = false; scene.add(s); puffs.push({ s, life: 0 }); }
+let puffT = 0;
+function updateSmoke(dt) {
+  const hp = player.health ?? 100;
+  puffT -= dt;
+  if (hp < 50 && puffT <= 0) {
+    puffT = hp < 20 ? 0.06 : 0.16;
+    const p = puffs.find(q => q.life <= 0);
+    if (p) {
+      const fx = Math.sin(player.h), fz = Math.cos(player.h), L = player.V.L / 2 - 0.6;
+      p.s.position.set(player.x + fx * L, player.y + 1.2, player.z + fz * L); p.life = 1.6; p.s.visible = true;
+      p.s.material.color.set(hp < 20 ? '#2a2a2a' : '#9a9a9a');
+    }
+  }
+  for (const p of puffs) if (p.life > 0) {
+    p.life -= dt; p.s.position.y += dt * 1.6; const k = 1.6 - p.life;
+    p.s.scale.setScalar(0.8 + k * 2.2); p.s.material.opacity = Math.max(0, p.life / 1.6) * 0.7;
+    if (p.life <= 0) p.s.visible = false;
+  }
+}
+
 // ---------- game state ----------
 const G = {
   mode: 'menu', mission: null, ms: null, t: 0, paused: false,
@@ -287,12 +320,40 @@ const M = {
   fail(reason) { endMission(false, 0, [reason]); },
 };
 
+// ---------- the open city ----------
+const cityApi = {
+  T, save, persist, missions: MISSIONS, marker: (...a) => makeMarker(...a), person: (...a) => makePerson(...a),
+  home: () => homeHouse(), toast: (text, bad) => { G.toast = { text, t: 3, bad }; }, sfx, say: t => say(t, save.lang),
+  gps: (x, z) => { if (x == null) { G.gps = G.waypoint ? { ...G.waypoint } : null; } else M.gps(x, z); },
+  siren: on => { if (on !== G.siren) { sirenOn(on); G.siren = on; } },
+  trafficCars: () => traffic.cars,
+  startMission: def => startMission(def),
+  openDealer: () => openDealer(), openHome: () => openHome(),
+  repaint: () => { const c = new THREE.Color().setHSL(Math.random(), 0.6 + Math.random() * 0.3, 0.35 + Math.random() * 0.25); model.parts.paint.color.copy(c); G.carColor = '#' + c.getHexString(); },
+  busted: fine => { G.toast = { text: T(`被警察攔下來了！罰單 $${fine}`, `Pulled over! Ticket: $${fine}`), t: 4, bad: true }; sfx('fail'); },
+};
+const city = createCity(scene, cityApi);
+const bigmap = createBigMap({
+  data: () => ({ x: player ? player.x : 0, z: player ? player.z : 0, h: player ? player.h : 0, blips: G.city ? city.blips() : markers.map(m => ({ x: m.x, z: m.z, icon: '📍' })), stars: G.city ? G.stars.map(s => [s.x, s.z]) : null, waypoint: G.waypoint, route: G.route && G.route.pts }),
+  onWaypoint: (x, z) => {
+    if (G.city) {
+      if (x == null) { G.waypoint = null; if (!city.ride) M.gps(null); }
+      else { G.waypoint = { x, z }; if (!city.ride) M.gps(x, z); sfx('beep'); }
+    }
+  },
+  onClose: () => { if (G.mode === 'map') G.mode = 'drive'; },
+});
+function openBigMap() { if (G.mode !== 'drive') return; G.mode = 'map'; engineOff(); horn(false); bigmap.open(); }
+
+function restoreParked() { for (const p of W.parked) if (p.hidden) p.show(); }
+function clearLeftCars() { for (const c of leftCars) if (c.model !== model) scene.remove(c.model.root); leftCars.length = 0; }
+
 function clearMission() {
   for (const m of [...markers]) m.remove();
   for (const o of [...live]) o.remove && o.remove();
   live.length = 0;
   while (props.children.length) props.remove(props.children[0]);
-  clearTemp();
+  clearTemp(); restorePermanent();
   for (const c of traffic.extra) scene.remove(c.model.root);
   traffic.extra.length = 0;
   jingleOn(false); sirenOn(false); G.siren = false;
@@ -301,7 +362,10 @@ function clearMission() {
 }
 
 function startMission(def) {
-  clearMission();
+  if (def.id === 'free') return startCity({ vehicle: def.vehicle, tod: def.tod });
+  if (G.city) { G.cityReturn = { tod }; city.stop(); G.city = false; } else G.cityReturn = null;
+  clearMission(); clearLeftCars(); restoreParked();
+  G.onFoot = false; walker.show(false); G.waypoint = null;
   G.mission = def; G.mode = 'drive'; G.t = 0; G.viol = resetViol(); G.rulesOn = true; G.cool = {}; G.prevSig = {};
   G.home = homeHouse();
   G.vehicle = def.vehicle || G.freeVehicle || 'suv';
@@ -320,6 +384,25 @@ function startMission(def) {
   if (isTouch) document.getElementById('touch').classList.remove('hidden');
   audioInit();
 }
+// the open city: drive or walk anywhere, earn money, avoid the police
+function startCity(o = {}) {
+  if (G.city) city.stop();
+  clearMission(); clearLeftCars(); restoreParked();
+  G.mission = { ...FREE, id: 'free' }; G.mode = 'drive'; G.t = 0; G.viol = resetViol(); G.rulesOn = true; G.cool = {}; G.prevSig = {};
+  G.home = homeHouse(); G.city = true; G.waypoint = null; G.ms = null; G.onFoot = false;
+  setTOD(o.tod || G.freeTOD || 'day');
+  G.vehicle = o.vehicle || G.freeVehicle || 'suv';
+  if (o.at) { spawnPlayer(G.vehicle, o.at.x, o.at.z, o.at.h, o.color); }
+  else M.startAtHome();
+  G.stars = [];
+  STARS.forEach((s, i) => { if (!save.found.includes(i)) G.stars.push(makeStar(s, i)); });
+  city.start();
+  M.tip(T('城市自由模式！按 M 看全地圖、F 下車／上車、E 互動。橘色圓圈是任務，🙋 是要搭便車的人。小心別被警察追！', 'Open city! M opens the map, F gets in and out, E interacts. Orange rings are missions, 🙋 people want a ride. Don’t get the police after you!'));
+  hideAll();
+  $('hudbar').classList.remove('hidden');
+  if (isTouch) $('touch').classList.remove('hidden');
+  audioInit();
+}
 function makeStar(s, i) {
   const shape = new THREE.Shape();
   for (let k = 0; k < 10; k++) { const a = k / 10 * Math.PI * 2 - Math.PI / 2, r = k % 2 ? 0.45 : 1.1; k ? shape.lineTo(Math.cos(a) * r, Math.sin(a) * r) : shape.moveTo(Math.cos(a) * r, Math.sin(a) * r); }
@@ -334,8 +417,15 @@ function endMission(ok, stars, lines, quote) {
   if (G.mode !== 'drive') return;
   G.mode = 'result';
   const def = G.mission;
-  if (ok) { sfx('win'); if (!save.stars[def.id] || stars > save.stars[def.id]) { save.stars[def.id] = stars; persist(); } }
-  else sfx('fail');
+  let reward = 0;
+  if (ok) {
+    sfx('win');
+    const prev = save.stars[def.id] || 0;
+    if (!save.stars[def.id] || stars > save.stars[def.id]) { save.stars[def.id] = stars; }
+    reward = 15 * stars + Math.max(0, stars - prev) * 50;   // a bonus for every new star
+    save.money = (save.money || 0) + reward; persist();
+    lines = [...lines, T(`💵 獎金 $${reward}`, `💵 Reward $${reward}`)];
+  } else sfx('fail');
   jingleOn(false); sirenOn(false);
   const el = document.getElementById('result');
   el.querySelector('.rtitle').textContent = ok ? T('任務完成！', 'Mission complete!') : T('任務失敗', 'Mission failed');
@@ -343,7 +433,8 @@ function endMission(ok, stars, lines, quote) {
   el.querySelector('.rquote').textContent = quote || '';
   el.querySelector('.rlines').innerHTML = lines.map(l => `<div>${l}</div>`).join('');
   const idx = MISSIONS.indexOf(def);
-  el.querySelector('#rnext').style.display = ok && idx >= 0 && idx < MISSIONS.length - 1 ? '' : 'none';
+  el.querySelector('#rnext').style.display = ok && idx >= 0 && idx < MISSIONS.length - 1 && !G.cityReturn ? '' : 'none';
+  el.querySelector('#rcity').style.display = G.cityReturn ? '' : 'none';
   el.classList.remove('hidden');
   document.getElementById('touch').classList.add('hidden');
   if (ok && quote) say(quote.replace(/^[^「"]*[「"]|[」"]$/g, ''), save.lang);
@@ -351,6 +442,11 @@ function endMission(ok, stars, lines, quote) {
 
 // ---------- rules ----------
 function checkRules(dt) {
+  if (G.onFoot) {
+    const r = nearestRoad(player.x, player.z);
+    G.street = r && r.edge < 3 ? (r.name || T('社區小路', 'Neighbourhood street')) : '';
+    G.limit = 25; return;
+  }
   const P = player, v = G.viol;
   const cool = (k, s) => { if ((G.cool[k] || 0) > G.t) return false; G.cool[k] = G.t + s; return true; };
   const r = nearestRoad(P.x, P.z);
@@ -358,7 +454,11 @@ function checkRules(dt) {
   if (r && r.name === 'Sage Canyon School') G.street = 'Sage Canyon School';
   G.limit = r && r.edge < 3 ? LIMIT(r.name) : 25;
   // crashes
-  if (P.impact > 3.5 && ['house', 'car', 'parked', 'pole', 'tree', 'sign', 'school', 'building', 'barrier', 'bin', 'play', 'goal'].includes(P.hitTag)) {
+  if (P.impact > 4 && P.hitTag !== 'edge') {
+    P.health -= (P.impact - 3.5) * 3.2;
+    if (P.health <= 0 && !G.brokeMsg) { G.brokeMsg = true; G.toast = { text: T('車子壞了！按 F 下車，或按 R 叫拖吊車（$30）', 'Your car broke down! F to get out, or R for a tow ($30)'), t: 5, bad: true }; }
+  }
+  if (P.impact > 3.5 && ['house', 'car', 'parked', 'pole', 'tree', 'sign', 'school', 'building', 'barrier', 'bin', 'play', 'goal', 'landing'].includes(P.hitTag)) {
     sfx(P.impact > 7 ? 'crash' : 'bump', Math.min(1, P.impact / 10));
     if (cool('crash', 1.5)) { if (G.rulesOn || G.mission?.id === 'race' || G.mission?.id === 'parking') v.crash++; G.toast = { text: T('碰！小心駕駛', 'Bump! Careful'), t: 1.5, bad: true }; }
   } else if (P.impact > 1.2) sfx('bump', 0.3);
@@ -466,8 +566,34 @@ function updateGPS(dt) {
 
 // ---------- camera ----------
 const camState = { init: false, pos: new THREE.Vector3(), look: new THREE.Vector3(), yaw: 0 };
+// keep the camera out of houses: pull it in front of the first wall between the car and the camera
+const camRay = new THREE.Raycaster();
+const camBlockers = [W.houses.walls, W.houses.fronts, W.houses.roofs];
+function unblock(look, pos) {
+  const dir = pos.clone().sub(look), len = dir.length();
+  if (len < 0.5) return pos;
+  camRay.set(look, dir.divideScalar(len)); camRay.far = len;
+  const hit = camRay.intersectObjects(camBlockers, false)[0];
+  return hit ? look.clone().addScaledVector(dir, Math.max(0.8, hit.distance - 0.4)) : pos;
+}
 const CAMS = ['chase', 'far', 'hood', 'top'];
 function updateCamera(dt) {
+  if (G.onFoot) {
+    const P = walker;
+    let dy = P.h - camState.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+    if (!camState.init) camState.yaw = P.h; else camState.yaw += dy * Math.min(1, dt * 3);
+    const cy = Math.sin(camState.yaw), cz = Math.cos(camState.yaw);
+    const pos = new THREE.Vector3(P.x - cy * 4.6, P.y + 2.3, P.z - cz * 4.6);
+    const gh = terrainH(pos.x, pos.z) + 0.8; if (pos.y < gh) pos.y = gh;
+    const look = new THREE.Vector3(P.x + cy * 1.5, P.y + 1.3, P.z + cz * 1.5);
+    pos.copy(unblock(new THREE.Vector3(P.x, P.y + 1.6, P.z), pos));
+    if (!camState.init) { camState.pos.copy(pos); camState.look.copy(look); camState.init = true; }
+    else { camState.pos.lerp(pos, Math.min(1, dt * 7)); camState.look.lerp(look, Math.min(1, dt * 10)); }
+    camera.position.copy(camState.pos); camera.lookAt(camState.look); camera.fov = 62; camera.updateProjectionMatrix();
+    const sd = sky.mat.uniforms.sunDir.value;
+    sun.position.set(P.x + sd.x * 150, P.y + sd.y * 150, P.z + sd.z * 150); sun.target.position.set(P.x, P.y, P.z);
+    return;
+  }
   const P = player, V = VEHICLES[kind];
   const mode = CAMS[G.cam];
   const fx = Math.sin(P.h), fz = Math.cos(P.h);
@@ -499,6 +625,7 @@ function updateCamera(dt) {
   }
   if (!camState.init || mode === 'hood') { camState.pos.copy(pos); camState.look.copy(look); camState.init = true; }
   else { camState.pos.lerp(pos, Math.min(1, dt * 6)); camState.look.lerp(look, Math.min(1, dt * 10)); }
+  if (mode === 'chase' || mode === 'far') camState.pos.copy(unblock(new THREE.Vector3(P.x, P.y + 1.8, P.z), camState.pos));
   camera.position.copy(camState.pos); camera.lookAt(camState.look);
   camera.updateProjectionMatrix();
   model.body.visible = true;
@@ -513,11 +640,15 @@ const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in win
 addEventListener('keydown', e => {
   if (e.repeat) { keys[e.code] = true; return; }
   keys[e.code] = true;
+  if (G.mode === 'map') { if (e.code === 'KeyM' || e.code === 'Escape') bigmap.close(); return; }
   if (G.mode !== 'drive') { if (e.code === 'Escape' && G.mode === 'pause') resume(); return; }
   if (e.code === 'KeyC') G.cam = (G.cam + 1) % CAMS.length;
   if (e.code === 'KeyL') headOn = !headOn;
   if (e.code === 'KeyR') resetCar();
-  if (e.code === 'KeyM') G.bigMap = !G.bigMap;
+  if (e.code === 'KeyM') openBigMap();
+  if (e.code === 'KeyN') G.bigMap = !G.bigMap;
+  if (e.code === 'KeyF') toggleCar();
+  if (e.code === 'KeyE') actionKey();
   if (e.code === 'Escape' || e.code === 'KeyP') pause();
   if (['ArrowUp', 'ArrowDown', 'Space'].includes(e.code)) e.preventDefault();
 });
@@ -543,9 +674,53 @@ function input() {
     throttle = Math.max(throttle, touchState.gas); brake = Math.max(brake, touchState.brake);
     hand = hand || touchState.hand; hornK = hornK || touchState.horn;
   }
-  return { steer, throttle, brake, hand, horn: hornK };
+  return { steer, throttle, brake, hand, horn: hornK, jump: !!k.Space || touchState.hand, run: !!(k.ShiftLeft || k.ShiftRight) || touchState.run };
+}
+// get out of the car, or into the nearest one
+function toggleCar() {
+  if (G.mode !== 'drive') return;
+  if (!G.onFoot) {
+    if (player.speed > 3) { G.toast = { text: T('先停車再下車！', 'Stop the car first!'), t: 1.5 }; return; }
+    if (!G.city && G.mission && G.mission.id !== 'free') { G.toast = { text: T('任務中不能下車', 'You can’t get out during a mission'), t: 1.5 }; return; }
+    const lx = Math.cos(player.h), lz = -Math.sin(player.h);   // the car's left (driver's) side
+    const d = player.V.W / 2 + 0.8;
+    leftCars.push({ d: player, model });
+    player.vx = player.vz = 0;
+    walker.place(player.x + lx * d, player.z + lz * d, player.h);
+    walker.show(true); G.onFoot = true; player = walker; camState.init = false;
+    engineOff(); horn(false); headLight.intensity = 0; sfx('door');
+    if (city.ride) { /* the passenger leaves in city.update */ }
+    return;
+  }
+  // nearest car: one you left, or one parked on a driveway
+  let best = null, bd = 4.2;
+  for (const c of leftCars) { const dd = Math.hypot(c.d.x - walker.x, c.d.z - walker.z) - c.d.V.L / 2 + 1.5; if (dd < bd) { bd = dd; best = { left: c }; } }
+  for (const p of W.parked) if (!p.hidden) { const dd = Math.hypot(p.x - walker.x, p.z - walker.z) - 1.5; if (dd < bd) { bd = dd; best = { parked: p }; } }
+  if (!best) { G.toast = { text: T('附近沒有車', 'No car nearby'), t: 1.2 }; return; }
+  walker.show(false); G.onFoot = false; sfx('door');
+  if (best.left) {
+    const c = best.left; leftCars.splice(leftCars.indexOf(c), 1);
+    player = c.d; model = c.model; kind = c.d.kind;
+  } else {
+    const p = best.parked; p.hide();
+    kind = p.kind; model = buildVehicle(p.kind, p.color); scene.add(model.root);
+    player = new Driver(p.kind, p.x, p.z, p.h);
+    attachLights();
+    if (G.city && Math.random() < 0.5) city.addHeat(0.6);   // borrowing a neighbour's car gets noticed sometimes
+  }
+  if (!headLight || !model.root.children.includes(headLight)) attachLights();
+  camState.init = false;
+}
+function actionKey() {
+  if (G.mode !== 'drive' || !G.city || !city.prompt) return;
+  city.prompt.act();
 }
 function resetCar() {
+  if (G.onFoot) return;
+  if (player.health <= 0) {
+    if (G.city) { const fee = Math.min(30, save.money || 0); save.money -= fee; persist(); G.toast = { text: T(`拖吊車把你的車修好了 −$${fee}`, `The tow truck fixed your car −$${fee}`), t: 3 }; }
+    player.health = 100; G.brokeMsg = false;
+  }
   const s = roadSpot(player.x, player.z, player.h);
   player.x = s.x; player.z = s.z; player.h = s.h; player.vx = player.vz = 0; player.yawRate = 0;
   camState.init = false;
@@ -566,6 +741,10 @@ bindHold('tHand', () => touchState.hand = true, () => touchState.hand = false);
 bindHold('tHorn', () => touchState.horn = true, () => touchState.horn = false);
 document.getElementById('tCam').addEventListener('click', () => { G.cam = (G.cam + 1) % CAMS.length; });
 document.getElementById('tReset').addEventListener('click', () => resetCar());
+document.getElementById('tF').addEventListener('click', () => toggleCar());
+document.getElementById('tE').addEventListener('click', () => actionKey());
+document.getElementById('tMap').addEventListener('click', () => openBigMap());
+bindHold('tRun', () => touchState.run = true, () => touchState.run = false);
 document.getElementById('tPause').addEventListener('click', () => pause());
 addEventListener('deviceorientation', e => {
   if (!save.tilt) return;
@@ -578,7 +757,7 @@ addEventListener('deviceorientation', e => {
 
 // ---------- menus ----------
 const $ = id => document.getElementById(id);
-function hideAll() { for (const id of ['menu', 'missions', 'free', 'settings', 'result', 'pause']) $(id).classList.add('hidden'); }
+function hideAll() { for (const id of ['menu', 'missions', 'free', 'settings', 'result', 'pause', 'shop', 'home']) $(id).classList.add('hidden'); }
 function show(id) { hideAll(); $(id).classList.remove('hidden'); }
 function applyLang() {
   document.querySelectorAll('[data-zh]').forEach(el => { el.textContent = save.lang === 'zh' ? el.dataset.zh : el.dataset.en; });
@@ -599,9 +778,9 @@ function buildFree() {
   const total = totalStars();
   for (const [k, v] of Object.entries(VEHICLES)) {
     if (v.ai) continue;
-    const locked = total < v.unlock;
+    const locked = !save.owned.includes(k);
     const b = document.createElement('button'); b.className = 'vcard' + (G.freeVehicle === k ? ' sel' : '') + (locked ? ' locked' : '');
-    b.innerHTML = `<span class="sw" style="background:${v.color}"></span>${T(v.zh, v.en)}${locked ? ` 🔒${v.unlock}★` : ''}`;
+    b.innerHTML = `<span class="sw" style="background:${v.color}"></span>${T(v.zh, v.en)}${locked ? ` 🔒 $${PRICES[k]}` : ''}`;
     b.onclick = () => { if (locked) return; G.freeVehicle = k; buildFree(); };
     vs.appendChild(b);
   }
@@ -610,7 +789,7 @@ function buildFree() {
     const b = document.createElement('button'); b.className = 'vcard' + (G.freeTOD === k ? ' sel' : ''); b.textContent = T(zh, en);
     b.onclick = () => { G.freeTOD = k; buildFree(); }; ts.appendChild(b);
   }
-  $('freeFound').textContent = T(`已找到 ${save.found.length} / 20 顆星星`, `${save.found.length} / 20 stars found`);
+  $('freeFound').textContent = T(`💵 $${save.money}・已找到 ${save.found.length} / 20 顆星星・🔒 的車可以在城市裡的車行買`, `💵 $${save.money} · ${save.found.length} / 20 stars found · buy 🔒 cars at the dealer in the city`);
 }
 function buildSettings() {
   const sel = $('homeSel'); sel.innerHTML = '';
@@ -623,7 +802,60 @@ G.freeVehicle = 'suv'; G.freeTOD = 'day';
 $('bMissions').onclick = () => { buildMissionList(); show('missions'); };
 $('bFree').onclick = () => { buildFree(); show('free'); };
 $('bSettings').onclick = () => { buildSettings(); show('settings'); };
-$('bGo').onclick = () => startMission({ ...FREE, vehicle: G.freeVehicle, tod: G.freeTOD });
+$('bGo').onclick = () => startCity({ vehicle: G.freeVehicle, tod: G.freeTOD });
+$('rcity').onclick = () => { const o = G.cityReturn || {}; G.cityReturn = null; startCity({ vehicle: kind, tod: o.tod || tod, at: { x: player.x, z: player.z, h: player.h } }); };
+$('shopClose').onclick = () => { hideAll(); G.mode = 'drive'; };
+$('homeClose').onclick = () => { hideAll(); G.mode = 'drive'; };
+function openDealer() {
+  G.mode = 'shop'; engineOff(); horn(false); show('shop');
+  const box = $('shopList'); box.innerHTML = '';
+  $('shopMoney').textContent = `💵 $${save.money}`;
+  for (const [k, v] of Object.entries(VEHICLES)) {
+    if (v.ai) continue;
+    const owned = save.owned.includes(k), price = PRICES[k] ?? 300;
+    const needStars = k === 'police' ? 10 : 0, okStars = totalStars() >= needStars;
+    const b = document.createElement('button'); b.className = 'vcard' + (owned ? ' sel' : '');
+    b.innerHTML = `<span class="sw" style="background:${v.color}"></span>${T(v.zh, v.en)} — ${owned ? T('已擁有・開走', 'Owned · drive it') : `$${price}`}${!okStars ? T(`（要 ${needStars}★）`, ` (needs ${needStars}★)`) : ''}`;
+    b.onclick = () => {
+      if (!owned) {
+        if (!okStars) { sfx('fail'); return; }
+        if (save.money < price) { sfx('fail'); $('shopMoney').textContent = T(`💵 $${save.money}・錢不夠！`, `💵 $${save.money} · not enough!`); return; }
+        save.money -= price; save.owned.push(k); persist(); sfx('win');
+      }
+      // drive the car out of the showroom
+      const d = city.shops.dealer.door;
+      const sp = roadSpot(d[0], d[1], null);
+      if (!G.onFoot) leftCars.push({ d: player, model });
+      spawnPlayer(k, sp.x, sp.z, sp.h);
+      hideAll(); G.mode = 'drive';
+    };
+    box.appendChild(b);
+  }
+}
+function openHome() {
+  G.mode = 'home'; engineOff(); horn(false); show('home');
+  const gar = $('garageList'); gar.innerHTML = '';
+  for (const k of save.owned) {
+    const v = VEHICLES[k];
+    const b = document.createElement('button'); b.className = 'vcard';
+    b.innerHTML = `<span class="sw" style="background:${v.color}"></span>${T(v.zh, v.en)}`;
+    b.onclick = () => {
+      const h = G.home, kb = kerb(h), r = nearestRoad(kb.x, kb.z);
+      const sp = roadSpot(kb.x, kb.z, Math.atan2(r.tx, r.tz));
+      if (!G.onFoot) leftCars.push({ d: player, model });
+      spawnPlayer(k, sp.x, sp.z, sp.h); hideAll(); G.mode = 'drive';
+    };
+    gar.appendChild(b);
+  }
+  const ml = $('homeMissions'); ml.innerHTML = '';
+  for (const id of HOME_MISSIONS) {
+    const m = MISSIONS.find(q => q.id === id), st = save.stars[id] || 0;
+    const b = document.createElement('button'); b.className = 'vcard';
+    b.textContent = `${m.icon} ${T(m.zh, m.en)} ${'★'.repeat(st)}${'☆'.repeat(3 - st)}`;
+    b.onclick = () => startMission(m);
+    ml.appendChild(b);
+  }
+}
 document.querySelectorAll('.back').forEach(b => b.onclick = () => { show('menu'); applyLang(); });
 $('homeSel').onchange = e => { save.home = +e.target.value; persist(); };
 $('langSel').onchange = e => { save.lang = e.target.value; persist(); applyLang(); buildSettings(); };
@@ -647,7 +879,9 @@ $('pmenu').onclick = () => toMenu();
 function pause() { if (G.mode !== 'drive') return; G.mode = 'pause'; engineOff(); horn(false); show('pause'); }
 function resume() { hideAll(); G.mode = 'drive'; }
 function toMenu() {
-  clearMission(); G.mode = 'menu'; engineOff(); horn(false);
+  if (G.city) { city.stop(); G.city = false; }
+  clearMission(); clearLeftCars(); restoreParked(); G.onFoot = false; walker.show(false); G.cityReturn = null;
+  G.mode = 'menu'; engineOff(); horn(false);
   $('hudbar').classList.add('hidden'); $('touch').classList.add('hidden');
   show('menu'); applyLang();
   menuCam();
@@ -670,19 +904,32 @@ function frame(now) {
   if (G.mode === 'drive') {
     G.t += dt;
     const inp = input();
-    const others = traffic.cars.concat(traffic.extra);
-    const steps = 3;
-    for (let i = 0; i < steps; i++) player.update(dt / steps, inp, others);
-    poseVehicle(model, player, dt);
+    const parkedCars = leftCars.map(c => c.d);
+    const others = traffic.cars.concat(traffic.extra, parkedCars, G.city ? city.cops : []);
+    if (G.onFoot) {
+      walker.update(dt, inp, others);
+      if (walker.impact > 3) { if (!G.cool.walkHit || G.cool.walkHit < G.t) { G.cool.walkHit = G.t + 1.5; G.toast = { text: T('哎呀！小心車子！', 'Whoa! Watch out for cars!'), t: 1.5, bad: true }; sfx('bump', 0.4); } }
+    } else {
+      const steps = 3;
+      for (let i = 0; i < steps; i++) player.update(dt / steps, inp, others);
+      poseVehicle(model, player, dt);
+    }
+    for (const c of leftCars) poseVehicle(c.model, c.d, dt);
     traffic.update(dt, player);
     for (const o of live) o.update(dt);
+    const before = G.viol ? { ...G.viol } : null;
     checkRules(dt);
+    if (G.city && before) {
+      const HEAT = { speed: 0.6, stop: 0.5, red: 1.1, crash: 0.35, side: 0.3, ped: 1 };
+      for (const k in HEAT) if (G.viol[k] > before[k]) city.addHeat(HEAT[k]);
+    }
+    if (G.city) city.update(dt, { x: player.x, z: player.z, inCar: !G.onFoot, car: G.onFoot ? null : player, walker: G.onFoot ? walker : null, t: G.t });
     if (G.mission && G.mission.update && G.ms) G.mission.update(M, G.ms, dt);
     // stars in free drive
     for (const s of [...G.stars]) {
       s.m.rotation.y += dt * 2; s.m.position.y = s.y + Math.sin(G.t * 2 + s.i) * 0.3;
       if (Math.hypot(player.x - s.x, player.z - s.z) < 4.5) {
-        props.remove(s.m); G.stars.splice(G.stars.indexOf(s), 1); save.found.push(s.i); persist(); sfx('star');
+        props.remove(s.m); G.stars.splice(G.stars.indexOf(s), 1); save.found.push(s.i); save.money = (save.money || 0) + 25; persist(); sfx('star');
         G.toast = { text: `★ ${save.found.length} / 20`, t: 2 };
         if (save.found.length === 20) { G.toast = { text: T('20 顆星星全部找到了！🎉', 'All 20 stars found! 🎉'), t: 4 }; sfx('win'); }
       }
@@ -695,6 +942,7 @@ function frame(now) {
     updateGPS(dt);
     // markers bob
     for (const m of markers) if (m.g.userData.gem) { m.g.userData.gem.rotation.y += dt * 2; m.g.userData.gem.position.y = 5 + Math.sin(G.t * 3) * 0.4; }
+    if (!G.onFoot) {
     // car lights
     headLight.intensity = headOn ? 60 : 0;
     for (const l of model.parts.lights) l.material.color.set(headOn ? '#ffffff' : '#e8e2cc');
@@ -703,7 +951,9 @@ function frame(now) {
     if (model.parts.arm && G.armT != null) { G.armT += dt; model.parts.arm.rotation.z = Math.sin(Math.min(1, G.armT / 1.4) * Math.PI) * 1.4; if (G.armT > 1.4) G.armT = null; }
     if (model.parts.stopArm && !G.busArmOn) model.parts.stopArm.rotation.y = Math.PI / 2;
     horn(inp.horn, kind);
-    engineSound(player.speed, inp.throttle, kind, player.drift || 0, player.surface >= 3 && player.speed > 2);
+    engineSound(player.speed, player.health > 0 ? inp.throttle : 0, kind, player.drift || 0, player.surface >= 3 && player.speed > 2);
+    updateSmoke(dt);
+    }
     if (G.tipT > 0) { G.tipT -= dt; if (G.tipT <= 0) G.tip = null; }
     if (G.toast) G.toast.t -= dt;
     // AI horns
@@ -723,9 +973,11 @@ function frame(now) {
   drawHUD(hud, hudC.width, hudC.height, G.mode === 'drive' ? {
     dpr: devicePixelRatio, player, street: G.street, limit: G.limit || 25, nav: G.nav,
     mission: G.mission ? T(G.mission.zh, G.mission.en) : null, clockText: G.clockText, clockWarn: G.clockWarn, passenger: G.passenger,
-    tip: G.tip, toast: G.toast, showMap: true, bigMap: G.bigMap, routePts: G.route && G.route.pts, cars: traffic.cars, markers,
+    tip: G.tip, toast: G.toast, showMap: true, bigMap: G.bigMap, routePts: G.route && G.route.pts, cars: traffic.cars.concat(G.city ? city.cops : []), markers,
     stars: G.mission?.id === 'free' ? G.stars.map(s => [s.x, s.z]) : null, starCount: G.mission?.id === 'free' ? save.found.length : null,
     home: G.home, touch: isTouch, maxMph: Math.ceil(VEHICLES[kind].vmax * MPH / 10) * 10 + 10,
+    money: G.city ? save.money : null, wanted: G.city ? city.wanted : null, onFoot: G.onFoot, health: G.onFoot ? null : player.health,
+    prompt: G.city && city.prompt ? city.prompt.label : (G.onFoot ? T('F：上車', 'F: get in a car') : null),
   } : { dpr: devicePixelRatio });
 }
 setTOD('sunset');
@@ -735,4 +987,4 @@ show('menu');
 requestAnimationFrame(frame);
 
 // for testing
-window.SCD = { G, M, get player() { return player; }, MISSIONS, startMission, scene, camera, renderer, traffic: () => traffic, keys, setTOD, route, FREE, save };
+window.SCD = { G, M, get player() { return player; }, MISSIONS, startMission, startCity, city, walker, toggleCar, openBigMap, bigmap, leftCars, scene, camera, renderer, traffic: () => traffic, keys, setTOD, route, FREE, save, W };

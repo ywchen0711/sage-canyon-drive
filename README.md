@@ -31,6 +31,29 @@ The map also has:
 
 House numbers are made up. The game generates them so that each address can be a delivery target.
 
+## The open city
+
+Choose **Open city** from the menu to drive or walk anywhere you like.
+
+- **Full map:** press M. Drag to pan, scroll or pinch to zoom, and tap to set a waypoint; the GPS then routes you
+  there.
+- **Getting out:** press F to get out and walk around as Jasper. Press F next to a car to get in, either one you left
+  or one parked on a driveway.
+- **Money:** you earn money from missions (more for each new star), from giving hitchhikers (🙋) a ride (taxis earn
+  more), from stunt jumps and from the stars you find.
+- **Stunt ramps (⤴️):** there are ramps in the park, on the school blacktop, at a cul-de-sac and on canyon rims. The
+  longer you stay in the air, the more you earn.
+- **The police:** breaking the rules raises your wanted level (★). Police cars then chase you. Stay out of their way
+  to lose them, or get caught and pay a ticket.
+- **Paint & repair (🔧):** drive in to fix the car, get a new colour and lose the police.
+- **Carmel Cars (🚗):** buy the taxi, the sports car, the bus, the garbage truck, the ice cream truck or the police
+  car.
+- **Home (🏠):** take any car you own out of the garage, or start the missions that begin at home.
+- **Mission start points:** these are spread around the map. Drive into one and press E to start it.
+
+Cars take damage, and smoke when they are badly hurt. If one breaks down, call a tow truck with R, or get out and
+find another car.
+
 ## Missions
 
 | | Mission | Vehicle |
@@ -76,7 +99,11 @@ with street names, and it can read them aloud.
 | Horn | H | B | 📯 |
 | Camera | C | Y | 🎥 |
 | Headlights | L | | |
-| Back onto the road | R | | ↺ |
+| Back onto the road / tow | R | | ↺ |
+| Full map | M | | 🗺️ |
+| Get in / out | F | | 🚪 |
+| Interact | E | | ✋ |
+| Run / jump (on foot) | Shift / Space | | 🏃 / 🅿️ |
 | Pause | Esc | Start | ⏸ |
 
 In Settings you can choose which house is home. Missions that start at home will start from there.
@@ -92,6 +119,10 @@ In Settings you can choose which house is home. Missions that start at home will
 | `js/car.js` | Vehicle models and the driving model. |
 | `js/traffic.js` | Other cars, traffic lights and pedestrians. |
 | `js/missions.js` | The missions. |
+| `js/city.js` | The open city: money, police, hitchhikers, ramps, shops and mission start points. |
+| `js/onfoot.js` | Walking around as Jasper. |
+| `js/bigmap.js` | The full-screen map. |
+| `js/roadmesh.js` | The 3D road surfaces, kerbs, sidewalks and markings. |
 | `js/hud.js` | The HUD: street name, GPS, mini-map and speedometer. |
 | `js/audio.js` | Sound. |
 | `js/main.js` | The game loop, menus and input. |

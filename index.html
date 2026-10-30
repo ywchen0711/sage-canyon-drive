@@ -6,7 +6,7 @@
 <title>Sage Canyon 開車趣 Sage Canyon Drive</title>
 <meta name="description" content="A driving game on the real streets around Sage Canyon School, San Diego.">
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="style.css?v=1">
+<link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 <canvas id="view"></canvas>
@@ -21,9 +21,9 @@
     <p class="sub" data-zh="在 Sage Canyon School 附近的真實街道上開車！" data-en="Drive the real streets around Sage Canyon School!">在 Sage Canyon School 附近的真實街道上開車！</p>
     <div class="stars" id="starsTotal"></div>
     <button id="bMissions" class="big" data-zh="🗺️ 任務" data-en="🗺️ Missions">🗺️ 任務</button>
-    <button id="bFree" class="big" data-zh="⭐ 自由開車" data-en="⭐ Free drive">⭐ 自由開車</button>
+    <button id="bFree" class="big" data-zh="🌆 城市自由模式" data-en="🌆 Open city">🌆 城市自由模式</button>
     <button id="bSettings" data-zh="⚙️ 設定（我的家、語言）" data-en="⚙️ Settings (home, language)">⚙️ 設定</button>
-    <p class="keys" data-zh="W/↑ 油門・S/↓ 煞車倒車・A D 轉彎・空白鍵 手煞車・H 喇叭・C 視角・L 車燈・R 回到路上・Esc 暫停" data-en="W/↑ throttle · S/↓ brake/reverse · A D steer · Space handbrake · H horn · C camera · L lights · R back to road · Esc pause"></p>
+    <p class="keys" data-zh="W/↑ 油門・S/↓ 煞車倒車・A D 轉彎・空白鍵 手煞車／跳・H 喇叭・C 視角・L 車燈・R 回到路上・M 全地圖・F 上下車・E 互動・Shift 跑步・Esc 暫停" data-en="W/↑ throttle · S/↓ brake/reverse · A D steer · Space handbrake/jump · H horn · C camera · L lights · R back to road · M map · F get in/out · E interact · Shift run · Esc pause"></p>
   </div>
 </div>
 
@@ -37,7 +37,8 @@
 
 <div id="free" class="screen hidden">
   <div class="panel">
-    <h2 data-zh="自由開車" data-en="Free drive">自由開車</h2>
+    <h2 data-zh="城市自由模式" data-en="Open city">城市自由模式</h2>
+    <p class="note" data-zh="開車或走路到處逛：接地圖上的任務、載搭便車的人賺錢、玩特技跳台、去車行買車、到修車廠修車換顏色。違規太多警察會來追你！" data-en="Drive or walk anywhere: take missions on the map, give people rides for money, hit the stunt ramps, buy cars at the dealer and get repaired and repainted at the paint shop. Break too many rules and the police will chase you!"></p>
     <p id="freeFound"></p>
     <h3 data-zh="車子" data-en="Vehicle">車子</h3>
     <div id="vlist" class="row"></div>
@@ -69,6 +70,7 @@
     <div class="rquote"></div>
     <div class="rlines"></div>
     <button id="rnext" class="big" data-zh="下一個任務 →" data-en="Next mission →">下一個任務 →</button>
+    <button id="rcity" class="big" data-zh="回到城市 →" data-en="Back to the city →">回到城市 →</button>
     <button id="rretry" data-zh="再玩一次" data-en="Try again">再玩一次</button>
     <button id="rmenu" data-zh="回選單" data-en="Menu">回選單</button>
   </div>
@@ -83,13 +85,44 @@
   </div>
 </div>
 
+<div id="shop" class="screen hidden">
+  <div class="panel">
+    <h2 data-zh="🚗 Carmel 車行" data-en="🚗 Carmel Cars">🚗 Carmel 車行</h2>
+    <p id="shopMoney"></p>
+    <div id="shopList" class="row col"></div>
+    <button id="shopClose" data-zh="離開" data-en="Leave">離開</button>
+  </div>
+</div>
+
+<div id="home" class="screen hidden">
+  <div class="panel">
+    <h2 data-zh="🏠 我的家" data-en="🏠 Home">🏠 我的家</h2>
+    <h3 data-zh="車庫：選一台車開出去" data-en="Garage: take out a car">車庫：選一台車開出去</h3>
+    <div id="garageList" class="row"></div>
+    <h3 data-zh="從家裡出發的任務" data-en="Missions from home">從家裡出發的任務</h3>
+    <div id="homeMissions" class="row col"></div>
+    <button id="homeClose" data-zh="離開" data-en="Leave">離開</button>
+  </div>
+</div>
+
+<div id="bigmap" class="hidden">
+  <canvas id="bigmapCanvas"></canvas>
+  <div class="bmbar">
+    <span class="bmtitle" data-zh="點地圖設定目的地" data-en="Tap the map to set a waypoint">點地圖設定目的地</span>
+    <button id="bmPlus">＋</button><button id="bmMinus">－</button><button id="bmMe">📍</button>
+    <button id="bmClear" data-zh="清除目的地" data-en="Clear waypoint">清除目的地</button>
+    <button id="bmClose" data-zh="關閉 (M)" data-en="Close (M)">關閉 (M)</button>
+  </div>
+</div>
+
 <div id="hudbar" class="hidden"></div>
 <div id="touch" class="hidden">
   <div class="tl"><button id="tLeft">◀</button><button id="tRight">▶</button></div>
   <div class="tr"><button id="tBrake" class="pedal">⏪<small>BRAKE</small></button><button id="tGas" class="pedal gas">⏩<small>GAS</small></button></div>
-  <div class="tt"><button id="tPause">⏸</button><button id="tCam">🎥</button><button id="tReset">↺</button><button id="tHorn">📯</button><button id="tHand">🅿️</button></div>
+  <div class="tt"><button id="tPause">⏸</button><button id="tMap">🗺️</button><button id="tCam">🎥</button><button id="tReset">↺</button><button id="tHorn">📯</button></div>
+  <div class="tm"><button id="tF">🚪<small>F</small></button><button id="tE">✋<small>E</small></button><button id="tHand">🅿️</button><button id="tRun">🏃</button></div>
 </div>
 
-<script type="module" src="js/main.js?v=1"></script>
+<script type="module" src="js/main.js?v=2"></script>
 </body>
 </html>

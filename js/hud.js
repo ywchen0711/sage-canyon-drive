@@ -163,8 +163,30 @@ export function drawHUD(g, W, H, S) {
     g.fillStyle = '#d33'; g.font = `bold ${13 * sc}px Arial`; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillText('N', cx - Math.sin(P.h) * (R - 12 * sc), cy + Math.cos(P.h) * (R - 12 * sc));
   }
+  // ---- money and wanted stars (top right, under the GPS card) ----
+  if (S.money != null) {
+    const x = W - 14 * sc, y = (S.nav ? 104 : 14) * sc;
+    g.textAlign = 'right'; g.textBaseline = 'top'; g.font = `bold ${26 * sc}px Arial`;
+    g.lineWidth = 5 * sc; g.strokeStyle = 'rgba(0,0,0,0.6)'; g.strokeText(`$${S.money}`, x, y); g.fillStyle = '#7dff8a'; g.fillText(`$${S.money}`, x, y);
+    if (S.wanted != null) {
+      g.font = `${24 * sc}px Arial`;
+      const flash = S.wanted > 0 && Math.floor(performance.now() / 300) % 2;
+      for (let i = 0; i < 3; i++) {
+        const on = i < S.wanted;
+        g.fillStyle = on ? (flash ? '#ffffff' : '#ffcc00') : 'rgba(255,255,255,0.25)';
+        g.strokeText('★', x - i * 26 * sc, y + 34 * sc); g.fillText('★', x - i * 26 * sc, y + 34 * sc);
+      }
+    }
+  }
+  if (S.prompt) {
+    g.font = `bold ${19 * sc}px Arial`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    const tw = g.measureText(S.prompt).width + 36 * sc, y = H * 0.68 - (S.touch ? 60 * sc : 0);
+    g.fillStyle = 'rgba(20,24,34,0.85)'; rr(g, W / 2 - tw / 2, y - 21 * sc, tw, 42 * sc, 21 * sc); g.fill();
+    g.strokeStyle = '#ffd23f'; g.lineWidth = 2 * sc; g.stroke();
+    g.fillStyle = '#fff'; g.fillText(S.prompt, W / 2, y + 1 * sc);
+  }
   // ---- speedometer (bottom right) ----
-  {
+  if (!S.onFoot) {
     const R = 70 * sc, cx = W - R - 22 * sc, cy = H - R - 18 * sc - (S.touch ? 140 * sc : 0);
     g.fillStyle = 'rgba(20,24,34,0.8)'; g.beginPath(); g.arc(cx, cy, R, 0, 7); g.fill();
     const over = mph > S.limit + 4;
@@ -180,6 +202,12 @@ export function drawHUD(g, W, H, S) {
     g.font = `${12 * sc}px Arial`; g.fillStyle = '#bbb'; g.fillText('mph', cx, cy + 22 * sc);
     g.font = `bold ${15 * sc}px Arial`; g.fillStyle = P.vf < -0.3 ? '#ffb000' : '#9fd8ff'; g.fillText(P.vf < -0.3 ? 'R' : 'D', cx, cy + 44 * sc);
     g.font = `${11 * sc}px Arial`; g.fillStyle = '#999'; g.fillText(`${Math.round(P.speed * 3.6)} km/h`, cx, cy - 30 * sc);
+    if (S.health != null && S.health < 100) {
+      const w = 110 * sc, hx = cx - w / 2, hy = cy - R - 16 * sc;
+      g.fillStyle = 'rgba(0,0,0,0.6)'; rr(g, hx, hy, w, 9 * sc, 4 * sc); g.fill();
+      g.fillStyle = S.health > 50 ? '#4cd964' : S.health > 20 ? '#ffb000' : '#ff4433'; rr(g, hx, hy, w * Math.max(0, S.health) / 100, 9 * sc, 4 * sc); g.fill();
+      g.font = `${11 * sc}px Arial`; g.fillStyle = '#fff'; g.fillText('🔧', hx - 10 * sc, hy + 5 * sc);
+    }
   }
   // ---- stars counter ----
   if (S.starCount != null) {

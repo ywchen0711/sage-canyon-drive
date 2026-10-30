@@ -208,3 +208,24 @@ export function houseAt(street, i) {
   const list = ADDRESSED.filter(h => h.street === street);
   return list[((i % list.length) + list.length) % list.length];
 }
+
+// ---------- stunt ramps (filled in by the city) ----------
+// each: { x, z, h (heading the ramp faces), len, w, ht }
+export const RAMPS = [];
+export function rampH(x, z) {
+  for (const r of RAMPS) {
+    const dx = x - r.x, dz = z - r.z;
+    if (dx * dx + dz * dz > (r.len + r.w) ** 2) continue;
+    const fx = Math.sin(r.h), fz = Math.cos(r.h);
+    const u = dx * fx + dz * fz + r.len / 2, v = -dx * fz + dz * fx;
+    if (u >= 0 && u <= r.len && Math.abs(v) <= r.w / 2) return r.ht * u / r.len;
+  }
+  return 0;
+}
+export const groundH = (x, z) => terrainH(x, z) + (RAMPS.length ? rampH(x, z) : 0);
+
+// shops in the open city (kept clear of trees in world.js)
+export const SHOPS = {
+  spray: { x: -313.7, z: -18.6, h: Math.PI },    // faces north, toward Carmel Mountain Rd
+  dealer: { x: -109, z: -43.4, h: Math.PI },
+};

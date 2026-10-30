@@ -1,7 +1,9 @@
 // The neighbourhood: terrain from the traced map, houses from the map's footprints, trees, signs and the school.
 import * as THREE from '../lib/three.module.min.js';
 import { MAP } from './mapdata.js';
-import { ROADS, NODES, EDGES, ADJ, terrainH, nearestRoad, HOUSES, clamp } from './roads.js';
+import { ROADS, NODES, EDGES, ADJ, terrainH, nearestRoad, HOUSES, clamp, SHOPS } from './roads.js';
+import { buildRoads } from './roadmesh.js';
+import { mergedVehicle } from './car.js';
 
 const rnd = (() => { let s = 12345; return () => (s = (s * 16807) % 2147483647) / 2147483647; })();
 const pick = a => a[Math.floor(rnd() * a.length)];
@@ -17,6 +19,7 @@ function addCol(o, r) {
 function addBox(x, z, w, d, ang, tag) {
   const o = { type: 'box', x, z, hw: w / 2, hd: d / 2, c: Math.cos(ang), s: Math.sin(ang), tag };
   COLLIDE.boxes.push(o); addCol(o, Math.hypot(w, d) / 2);
+  return o;
 }
 function addCircle(x, z, r, tag) { const o = { type: 'circle', x, z, r, tag }; COLLIDE.circles.push(o); addCol(o, r); }
 // temporary colliders for a mission (parked cars in the car park, bins…)
@@ -159,6 +162,7 @@ function buildHouses(scene) {
     const along = h.w >= h.d;   // ridge along the long side
     const rise = Math.min(hw, hd) * 0.5;
     const y = ht, yt = ht + rise;
+    Object.assign(h, { ht, rise, along, y0 });
     if (along) {
       const r = Math.max(0.01, Hw - Hd);
       const r1 = P(-r, 0, yt), r2 = P(r, 0, yt);
@@ -187,6 +191,72 @@ function buildHouses(scene) {
   return { walls: mk(W, wallTex, wallGlow), fronts: mk(F, frontTex, frontGlow), roofs: mk(R, roofTex) };
 }
 
+// ---------- pools, solar panels, chimneys and front-garden shrubs ----------
+function buildHouseExtras(scene) {
+  const M = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(0, 0, 0, 'YXZ'), s = new THREE.Vector3(), v = new THREE.Vector3();
+  const up = new THREE.Vector3(0, 1, 0);
+  const panels = [], chims = [], pools = [], shrubs = [];
+  const homes = HOUSES.filter(h => !h.school && h.ht);
+  for (const h of homes) {
+    const ca = Math.cos(h.ang), sa = Math.sin(h.ang);
+    const hw = h.w / 2, hd = h.d / 2, o = 0.55;
+    const W2 = (u, w) => [h.x + u * ca - w * sa, h.z + u * sa + w * ca];
+    // solar panels on the roof slope that faces most to the south (+z)
+    if (rnd() < 0.35) {
+      // the slope's outward direction in world space: local +v is (-sa, ca), local +u is (ca, sa)
+      let dir, run, len;
+      if (h.along) { const sgn = ca >= 0 ? 1 : -1; dir = [-sa * sgn, ca * sgn]; run = hd + o; len = Math.min(h.w * 0.6, 9); }
+      else { const sgn = sa >= 0 ? 1 : -1; dir = [ca * sgn, sa * sgn]; run = hw + o; len = Math.min(h.d * 0.6, 9); }
+      const px = h.x + dir[0] * run * 0.5, pz = h.z + dir[1] * run * 0.5;
+      const slope = Math.atan2(h.rise, run);
+      // a panel facing the slope direction: yaw so local +z points down the slope, then tilt
+      panels.push({ x: px, z: pz, y: h.y0 + h.ht + h.rise * 0.5 + 0.12, ry: Math.atan2(dir[0], dir[1]), rx: slope, w: len, d: run * 0.7 });
+    }
+    if (rnd() < 0.3) { const [cx, cz] = W2((rnd() - 0.5) * hw, (rnd() - 0.5) * hd); chims.push({ x: cx, z: cz, y: h.y0 + h.ht + h.rise * 0.7, ry: -h.ang }); }
+    // back-yard pool if there is room behind the house
+    const fx = Math.sin(h.front), fz = Math.cos(h.front);
+    const ext = Math.abs(hw * (ca * fx + sa * fz)) + Math.abs(hd * (-sa * fx + ca * fz));
+    if (rnd() < 0.4) {
+      const px = h.x - fx * (ext + 4.2), pz = h.z - fz * (ext + 4.2);
+      const nr = nearestRoad(px, pz);
+      const clear = terrainH(px, pz) > -0.4 && (!nr || nr.edge > 5) &&
+        HOUSES.every(o2 => o2 === h || Math.hypot(o2.x - px, o2.z - pz) > Math.max(o2.w, o2.d) / 2 + 4.5);
+      if (clear) pools.push({ x: px, z: pz, ry: h.front, w: 4 + rnd() * 1.5, d: 7 + rnd() * 3 });
+    }
+    // shrubs along the front wall
+    for (let k = 0; k < 3; k++) {
+      const along = ((k - 1) * 0.3 + (rnd() - 0.5) * 0.1) * Math.max(hw, hd) * 1.6;
+      shrubs.push([h.x + fx * (ext + 0.9) + fz * along, h.z + fz * (ext + 0.9) - fx * along]);
+    }
+  }
+  const pm = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 0.08, 1), new THREE.MeshLambertMaterial({ color: '#1e2c4a', emissive: '#0a1430', emissiveIntensity: 0.4 }), panels.length);
+  // tilt so the downhill (+z) edge drops: rotate about local x by +slope
+  panels.forEach((p, i) => { e.set(p.rx, p.ry, 0); q.setFromEuler(e); M.compose(v.set(p.x, p.y, p.z), q, s.set(p.w, 1, p.d)); pm.setMatrixAt(i, M); });
+  const cm = new THREE.InstancedMesh(new THREE.BoxGeometry(0.9, 2.2, 0.9), new THREE.MeshLambertMaterial({ color: '#a8735a' }), chims.length);
+  chims.forEach((c, i) => { q.setFromAxisAngle(up, c.ry); M.compose(v.set(c.x, c.y, c.z), q, s.set(1, 1, 1)); cm.setMatrixAt(i, M); });
+  cm.castShadow = true;
+  const waterTex = canvasTex(128, 128, (g, w, h) => { g.fillStyle = '#37b6e6'; g.fillRect(0, 0, w, h); g.strokeStyle = 'rgba(255,255,255,0.35)'; g.lineWidth = 2; for (let i = 0; i < 14; i++) { g.beginPath(); const x = rnd() * w, y = rnd() * h; g.moveTo(x, y); g.bezierCurveTo(x + 10, y - 6, x + 20, y + 6, x + 30, y); g.stroke(); } });
+  const wm = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), new THREE.MeshLambertMaterial({ map: waterTex, emissive: '#0a4a6a', emissiveIntensity: 0.5 }), pools.length);
+  const deck = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 0.12, 1), new THREE.MeshLambertMaterial({ color: '#e9e3d6' }), pools.length);
+  pools.forEach((p, i) => {
+    q.setFromAxisAngle(up, p.ry);
+    const y = terrainH(p.x, p.z);
+    M.compose(v.set(p.x, y + 0.1, p.z), q, s.set(p.w, 1, p.d)); wm.setMatrixAt(i, M);
+    M.compose(v.set(p.x, y + 0.02, p.z), q, s.set(p.w + 1.6, 1, p.d + 1.6)); deck.setMatrixAt(i, M);
+  });
+  deck.receiveShadow = true; wm.receiveShadow = true;
+  const sh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ color: '#fff', flatShading: true }), shrubs.length);
+  const col = new THREE.Color();
+  shrubs.forEach(([x, z], i) => {
+    const r = 0.55 + rnd() * 0.45;
+    M.compose(v.set(x, terrainH(x, z) + r * 0.6, z), q.identity(), s.set(r, r * 0.8, r)); sh.setMatrixAt(i, M);
+    sh.setColorAt(i, rnd() < 0.15 ? col.setHSL(0.92 + rnd() * 0.06, 0.6, 0.6) : col.setHSL(0.27 + rnd() * 0.06, 0.4, 0.28 + rnd() * 0.08));
+  });
+  sh.castShadow = true;
+  scene.add(pm, cm, wm, deck, sh);
+  return { pools };
+}
+
 // ---------- terrain ----------
 function buildTerrain(scene, groundTex) {
   const w = MAP.xmax - MAP.xmin, d = MAP.zmax - MAP.zmin;
@@ -200,7 +270,20 @@ function buildTerrain(scene, groundTex) {
     uv.setXY(i, (x - MAP.xmin) / w, 1 - (z - MAP.zmin) / d);
   }
   g.computeVertexNormals();
-  const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ map: groundTex }));
+  const tm = new THREE.MeshLambertMaterial({ map: groundTex });
+  // a tiled detail texture breaks up the blur of the big ground map up close
+  const detail = canvasTex(256, 256, (g2, w2, h2) => {
+    g2.fillStyle = '#9e9e9e'; g2.fillRect(0, 0, w2, h2);
+    for (let i = 0; i < 9000; i++) { const v = 110 + rnd() * 90; g2.fillStyle = `rgba(${v},${v},${v},0.55)`; g2.fillRect(rnd() * w2, rnd() * h2, 1 + rnd() * 2.5, 1 + rnd() * 2.5); }
+  }, true);
+  detail.colorSpace = THREE.NoColorSpace;
+  tm.onBeforeCompile = (sh) => {
+    sh.uniforms.detailMap = { value: detail };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vDet;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvDet = (modelMatrix * vec4(position, 1.0)).xz * 0.42;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform sampler2D detailMap; varying vec2 vDet;')
+      .replace('#include <map_fragment>', '#include <map_fragment>\nvec3 dtl = texture2D(detailMap, vDet).rgb * texture2D(detailMap, vDet * 0.13).rgb;\ndiffuseColor.rgb *= 0.55 + dtl * 1.1;');
+  };
+  const m = new THREE.Mesh(g, tm);
   m.receiveShadow = true;
   scene.add(m);
   // the land beyond the map: a frame around it, then hills
@@ -242,7 +325,7 @@ function buildTerrain(scene, groundTex) {
 
 // ---------- vegetation ----------
 function buildTrees(scene) {
-  const T = MAP.trees;
+  const T = MAP.trees.filter(t => Object.values(SHOPS).every(sp => Math.hypot(t[0] - sp.x, t[1] - sp.z) > 16));
   const kinds = [[], [], [], []];
   for (const t of T) kinds[t[2]].push(t);
   const M = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), v = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
@@ -265,10 +348,18 @@ function buildTrees(scene) {
     M.compose(v.set(t[0], y, t[1]), q.identity(), s.set(1, h, 1)); im.setMatrixAt(i, M); t.h = h; t.y = y;
     addCircle(t[0], t[1], 0.45, 'tree');
   });
-  make(leafG, leafM, round, (t, i, im) => {
-    const r = 2 + rnd() * 1.6;
-    M.compose(v.set(t[0], t.y + t.h + r * 0.6, t[1]), q.setFromAxisAngle(up, rnd() * 6), s.set(r, r * 0.85, r)); im.setMatrixAt(i, M);
-    im.setColorAt(i, c.setHSL(0.24 + rnd() * 0.07, 0.35 + rnd() * 0.2, 0.26 + rnd() * 0.1));
+  const blobs = [];
+  for (const t of round) {
+    const r = 1.8 + rnd() * 1.4, hue = 0.22 + rnd() * 0.09, sat = 0.32 + rnd() * 0.2, lit = 0.24 + rnd() * 0.1;
+    blobs.push({ x: t[0], y: t.y + t.h + r * 0.55, z: t[1], r, hue, sat, lit });
+    for (let k = 0; k < 3; k++) {
+      const a = rnd() * 6.28, d = r * 0.55;
+      blobs.push({ x: t[0] + Math.cos(a) * d, y: t.y + t.h + r * (0.2 + rnd() * 0.6), z: t[1] + Math.sin(a) * d, r: r * (0.55 + rnd() * 0.2), hue, sat, lit: lit + (rnd() - 0.4) * 0.08 });
+    }
+  }
+  make(leafG, leafM, blobs, (b, i, im) => {
+    M.compose(v.set(b.x, b.y, b.z), q.setFromAxisAngle(up, rnd() * 6), s.set(b.r, b.r * 0.85, b.r)); im.setMatrixAt(i, M);
+    im.setColorAt(i, c.setHSL(b.hue, b.sat, b.lit));
   });
   // palms
   const palms = kinds[1];
@@ -381,9 +472,12 @@ function buildFurniture(scene) {
     names.slice(0, 2).forEach((nm, k) => {
       const e = EDGES[ADJ[i].find(ei => ROADS[EDGES[ei].r].name === nm)];
       const [dx, dz] = dir(e);
-      const plate = new THREE.Mesh(new THREE.PlaneGeometry(1.9, 0.36), new THREE.MeshLambertMaterial({ map: nameSignTex(nm), side: THREE.DoubleSide }));
-      plate.position.y = 3.0 + k * 0.4; plate.rotation.y = Math.atan2(dx, dz) + Math.PI / 2;
-      g.add(plate);
+      // two single-sided plates back to back so the name reads correctly from both sides
+      for (const flip of [0, Math.PI]) {
+        const plate = new THREE.Mesh(new THREE.PlaneGeometry(1.9, 0.36), new THREE.MeshLambertMaterial({ map: nameSignTex(nm) }));
+        plate.position.y = 3.0 + k * 0.4; plate.rotation.y = Math.atan2(dx, dz) + Math.PI / 2 + flip;
+        g.add(plate);
+      }
     });
     g.position.set(px, terrainH(px, pz), pz);
     addCircle(px, pz, 0.15, 'sign');
@@ -516,24 +610,40 @@ function buildFurniture(scene) {
 // ---------- parked cars (simple shapes) ----------
 function buildParked(scene) {
   const list = HOUSES.filter(h => h.drive && h.num && rnd() < 0.42);
-  const body = new THREE.InstancedMesh(new THREE.BoxGeometry(1.8, 0.75, 4.4).translate(0, 0.62, 0), new THREE.MeshLambertMaterial({ color: '#fff' }), list.length);
-  const cab = new THREE.InstancedMesh(new THREE.BoxGeometry(1.6, 0.6, 2.3).translate(0, 1.28, -0.2), new THREE.MeshLambertMaterial({ color: '#3b4752' }), list.length);
-  const wheel = new THREE.InstancedMesh(new THREE.BoxGeometry(1.9, 0.6, 3.0).translate(0, 0.3, 0), new THREE.MeshLambertMaterial({ color: '#1c1c1c' }), list.length);
+  const KINDS = ['sedan', 'suv', 'minivan'];
+  const COLS = ['#f4f4f4', '#1a1a1a', '#8d949a', '#2c4a7a', '#7a1c1c', '#c9c9c9', '#3a5a40', '#d9d2c3', '#5b6f8a'];
   const M = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(1, 1, 1), v = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0), c = new THREE.Color();
-  const COLS = ['#f4f4f4', '#1a1a1a', '#8d949a', '#2c4a7a', '#7a1c1c', '#c9c9c9', '#3a5a40', '#d9d2c3'];
+  const cars = list.map(h => ({ h, kind: pick(KINDS), color: pick(COLS) }));
+  const meshes = {};
+  for (const k of KINDS) {
+    const n = cars.filter(c => c.kind === k).length;
+    const g = mergedVehicle(k);
+    const paint = new THREE.InstancedMesh(g.paint, new THREE.MeshLambertMaterial({ color: '#fff', vertexColors: true }), Math.max(1, n));
+    const fixed = new THREE.InstancedMesh(g.fixed, new THREE.MeshLambertMaterial({ vertexColors: true }), Math.max(1, n));
+    paint.count = fixed.count = n;
+    paint.castShadow = fixed.castShadow = true;
+    scene.add(paint, fixed);
+    meshes[k] = { paint, fixed, i: 0 };
+  }
   const out = [];
-  list.forEach((h, i) => {
-    const fx = Math.sin(h.front), fz = Math.cos(h.front);
-    // halfway up the driveway
-    const x = h.drive[0] - fx * 4.2, z = h.drive[1] - fz * 4.2;
+  for (const car of cars) {
+    const h = car.h, fx = Math.sin(h.front), fz = Math.cos(h.front);
+    const x = h.drive[0] - fx * 4.2, z = h.drive[1] - fz * 4.2;   // halfway up the driveway
     const y = terrainH(x, z);
-    q.setFromAxisAngle(up, h.front + (rnd() < 0.5 ? Math.PI : 0));
-    M.compose(v.set(x, y, z), q, s); body.setMatrixAt(i, M); cab.setMatrixAt(i, M); wheel.setMatrixAt(i, M);
-    body.setColorAt(i, c.set(pick(COLS)));
-    addBox(x, z, 1.9, 4.5, -h.front, 'parked');   // long side (d) along the driveway
-    out.push([x, z]);
-  });
-  for (const m of [body, cab, wheel]) { m.castShadow = true; scene.add(m); }
+    const heading = h.front;   // backed in, nose to the street
+    const m = meshes[car.kind], idx = m.i++;
+    q.setFromAxisAngle(up, heading);
+    M.compose(v.set(x, y, z), q, s); m.paint.setMatrixAt(idx, M); m.fixed.setMatrixAt(idx, M);
+    m.paint.setColorAt(idx, c.set(car.color));
+    const col = addBox(x, z, 1.95, 4.8, -heading, 'parked');
+    const entry = {
+      x, z, h: heading, kind: car.kind, color: car.color, col, hidden: false,
+      hide() { M.makeScale(0, 0, 0); m.paint.setMatrixAt(idx, M); m.fixed.setMatrixAt(idx, M); m.paint.instanceMatrix.needsUpdate = m.fixed.instanceMatrix.needsUpdate = true; col.off = true; entry.hidden = true; },
+      show() { q.setFromAxisAngle(up, heading); M.compose(v.set(x, y, z), q, s.set(1, 1, 1)); m.paint.setMatrixAt(idx, M); m.fixed.setMatrixAt(idx, M); m.paint.instanceMatrix.needsUpdate = m.fixed.instanceMatrix.needsUpdate = true; col.off = false; entry.hidden = false; },
+    };
+    out.push(entry);
+  }
+  for (const k of KINDS) if (meshes[k].paint.instanceColor) meshes[k].paint.instanceColor.needsUpdate = true;
   return out;
 }
 
@@ -629,10 +739,12 @@ export function buildSky(scene) {
 export function buildWorld(scene, groundTex) {
   const terrain = buildTerrain(scene, groundTex);
   const houses = buildHouses(scene);
+  buildHouseExtras(scene);
+  const roads = buildRoads(scene);
   buildTrees(scene);
   const furn = buildFurniture(scene);
   const parked = buildParked(scene);
   const school = buildSchool(scene);
   buildPark(scene);
-  return { terrain, houses, furn, parked, school };
+  return { terrain, houses, furn, parked, school, roads };
 }

@@ -1,6 +1,6 @@
 // Vehicles: models built from extruded side profiles, and an arcade driving model.
 import * as THREE from '../lib/three.module.min.js';
-import { terrainH, surfaceAt, clamp } from './roads.js';
+import { terrainH, groundH, surfaceAt, clamp } from './roads.js';
 import { collidersNear, COLLIDE } from './world.js';
 import { MAP } from './mapdata.js';
 
@@ -13,10 +13,11 @@ export const VEHICLES = {
   garbage:  { zh: '垃圾車', en: 'Garbage truck', color: '#2f7a3d', L: 8.4, W: 2.5, vmax: 28, acc: 2.8, brake: 6.5, steer: 0.55, wb: 4.8, grip: 7, unlock: 0 },
   bus:      { zh: '黃色校車', en: 'School bus', color: '#f3b10b', L: 11.0, W: 2.5, vmax: 30, acc: 2.6, brake: 6, steer: 0.6, wb: 6.2, grip: 7, unlock: 0 },
   sedan:    { zh: '轎車', en: 'Sedan', color: '#888', L: 4.8, W: 1.85, vmax: 50, acc: 5.5, brake: 9, steer: 0.6, wb: 2.8, grip: 9, unlock: 0, ai: true },
+  taxi:     { zh: '計程車', en: 'Taxi', color: '#f6c21c', L: 4.9, W: 1.9, vmax: 50, acc: 5.8, brake: 9.5, steer: 0.6, wb: 2.85, grip: 9.5, unlock: 0 },
   pizza:    { zh: '小型掀背車', en: 'Hatchback', color: '#f08a24', L: 4.1, W: 1.8, vmax: 44, acc: 6.0, brake: 9.5, steer: 0.62, wb: 2.5, grip: 9.5, unlock: 0 },
 };
 
-const glassM = new THREE.MeshLambertMaterial({ color: '#1d2a36' });
+const glassM = new THREE.MeshLambertMaterial({ color: '#2c4258', emissive: '#0c1622' });
 const tireM = new THREE.MeshLambertMaterial({ color: '#1a1a1a' });
 const hubM = new THREE.MeshLambertMaterial({ color: '#b8bcc0' });
 const darkM = new THREE.MeshLambertMaterial({ color: '#2a2a2a' });
@@ -90,6 +91,13 @@ export function buildVehicle(kind, color) {
     wr = 0.34;
   }
   if (kind === 'sedan') body.add(carBody({ L, W, hood: 0.9, roof: 1.47, wsX: 0.95, topF: 0.25, topR: -1.15, rearX: -1.75, tail: 0.98, belt: 0.96 }, paint));
+  if (kind === 'taxi') {
+    body.add(carBody({ L, W, hood: 0.9, roof: 1.47, wsX: 0.95, topF: 0.25, topR: -1.15, rearX: -1.75, tail: 0.98, belt: 0.96 }, paint));
+    const sign = textPlane(0.8, 0.28, (g, w, h) => { g.fillStyle = '#111'; g.fillRect(0, 0, w, h); g.fillStyle = '#ffd23f'; g.font = `bold ${h * 0.7}px Arial`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('TAXI', w / 2, h / 2); });
+    const s2 = sign.clone(); sign.position.set(0, 1.66, -0.35); s2.position.set(0, 1.66, -0.35); s2.rotation.y = Math.PI;
+    body.add(box(0.85, 0.3, 0.3, new THREE.MeshLambertMaterial({ color: '#111' }), 0, 1.65, -0.35), sign, s2);
+    for (let i = 0; i < 6; i++) body.add(box(W + 0.03, 0.1, 0.25, new THREE.MeshLambertMaterial({ color: i % 2 ? '#111' : '#fff' }), 0, 0.82, -0.6 + i * 0.25));
+  }
   if (kind === 'police') {
     body.add(carBody({ L, W, hood: 0.92, roof: 1.5, wsX: 1.0, topF: 0.3, topR: -1.15, rearX: -1.75, tail: 1.0, belt: 0.98 }, paint));
     // black lower doors and bonnet like a California black-and-white
@@ -153,6 +161,12 @@ export function buildVehicle(kind, color) {
     for (const s of [-1, 1]) { const amber = box(0.25, 0.18, 0.05, new THREE.MeshBasicMaterial({ color: '#ffb000' }), s * 0.8, 2.85, L / 2 - 1.18); body.add(amber); }
     wr = 0.5; axF = L / 2 - 1.6; axR = axF - V.wb; track = W / 2 - 0.25;
   }
+  // side mirrors and grille on cars
+  if (['suv', 'minivan', 'sedan', 'taxi', 'police', 'pizza', 'sports'].includes(kind)) {
+    const my = kind === 'sports' ? 0.95 : 1.12, mz = { suv: 0.95, minivan: 1.4, sports: 0.6 }[kind] ?? 0.85;
+    for (const s of [-1, 1]) body.add(box(0.22, 0.14, 0.12, paint, s * (W / 2 + 0.1), my, mz));
+    body.add(box(W * 0.5, 0.18, 0.04, darkM, 0, kind === 'sports' ? 0.5 : 0.62, L / 2 + 0.03));
+  }
   // lights
   const head = new THREE.MeshBasicMaterial({ color: '#fff8e0' });
   const tailM = new THREE.MeshBasicMaterial({ color: '#7a1010' });
@@ -186,10 +200,13 @@ export class Driver {
     this.pitch = 0; this.roll = 0; this.lean = 0; this.dive = 0;
     this.surface = 0; this.sCount = 0; this.wheelSpin = 0;
     this.impact = 0; this.hitTag = null; this.braking = false; this.reversing = false;
+    this.vy = 0; this.air = false; this.airT = 0; this.landed = null; this.health = 100;
   }
   get speed() { return Math.hypot(this.vx, this.vz); }
   update(dt, inp, others) {
     const V = this.V;
+    if (this.air) return this.flyStep(dt, others);
+    if (this.health <= 0) inp = { ...inp, throttle: 0 };
     const fx = Math.sin(this.h), fz = Math.cos(this.h);
     const rx = -fz, rz = fx;   // right-hand side (x east, z south)
     let vf = this.vx * fx + this.vz * fz, vs = this.vx * rx + this.vz * rz;
@@ -248,16 +265,44 @@ export class Driver {
     // ride height and attitude from the ground under the wheels
     const hl = V.L * 0.36, hw = V.W * 0.42;
     const fxw = Math.sin(this.h), fzw = Math.cos(this.h);
-    const hF = terrainH(this.x + fxw * hl, this.z + fzw * hl), hB = terrainH(this.x - fxw * hl, this.z - fzw * hl);
-    const hR = terrainH(this.x - fzw * hw, this.z + fxw * hw), hL = terrainH(this.x + fzw * hw, this.z - fxw * hw);
+    const hF = groundH(this.x + fxw * hl, this.z + fzw * hl), hB = groundH(this.x - fxw * hl, this.z - fzw * hl);
+    const hR = groundH(this.x - fzw * hw, this.z + fxw * hw), hL = groundH(this.x + fzw * hw, this.z - fxw * hw);
     const bump = surf === 4 ? (Math.sin(this.x * 2.1) * Math.cos(this.z * 1.7)) * 0.05 * Math.min(1, Math.abs(vf) / 5) : 0;
-    this.y += ((hF + hB + hR + hL) / 4 + bump - this.y) * Math.min(1, dt * 12);
+    const lift = surf === 1 ? 0.11 : surf === 0 ? 0.03 : 0;
+    const target = (hF + hB + hR + hL) / 4 + bump + lift;
+    // leave the ground when it falls away faster than the car can follow (ramp lips, canyon edges)
+    const prevY = this.y;
+    if (target < this.y - 0.35 && this.speed > 7) {
+      this.air = true; this.airT = 0;
+      return;
+    }
+    this.y += (target - this.y) * Math.min(1, dt * 14);
+    this.vy = this.vy * 0.6 + ((this.y - prevY) / dt) * 0.4;
     this.pitch += (Math.atan2(hF - hB, hl * 2) - this.pitch) * Math.min(1, dt * 8);
     this.roll += (Math.atan2(hR - hL, hw * 2) - this.roll) * Math.min(1, dt * 8);
     // body lean from cornering and braking
     this.lean += (clamp(this.yawRate * vf * 0.012, -0.08, 0.08) - this.lean) * Math.min(1, dt * 6);
     this.dive += (clamp(-a * 0.006, -0.05, 0.05) - this.dive) * Math.min(1, dt * 6);
     this.wheelSpin += vf * dt / 0.36;
+  }
+  flyStep(dt, others) {
+    this.airT += dt;
+    this.vy -= 9.8 * dt;
+    this.vx *= 1 - 0.05 * dt; this.vz *= 1 - 0.05 * dt;
+    this.x += this.vx * dt; this.z += this.vz * dt; this.y += this.vy * dt;
+    this.pitch += (-0.25 - this.pitch) * dt * 0.8;     // nose drops slowly
+    this.yawRate *= 1 - dt;
+    this.h += this.yawRate * dt;
+    this.wheelSpin += this.vf * dt / 0.36;
+    this.impact = 0; this.hitTag = null;
+    this.collide(others);
+    const g = groundH(this.x, this.z);
+    if (this.y <= g) {
+      this.y = g; this.air = false;
+      this.landed = { air: this.airT, vy: -this.vy };
+      if (this.vy < -7) { this.impact = Math.max(this.impact, -this.vy - 4); this.hitTag = 'landing'; }
+      this.vy = 0;
+    }
   }
   circles() {
     const fx = Math.sin(this.h), fz = Math.cos(this.h), r = this.V.W / 2;
@@ -269,6 +314,7 @@ export class Driver {
   collide(others) {
     for (const [cx, cz, r] of this.circles()) {
       for (const o of collidersNear(cx, cz)) {
+        if (o.off) continue;
         let nx, nz, pen;
         if (o.type === 'circle') {
           const dx = cx - o.x, dz = cz - o.z, d = Math.hypot(dx, dz);
@@ -327,4 +373,29 @@ export function poseVehicle(model, d, dt) {
     w.w.rotation.x = d.wheelSpin * 0.36 / model.wr;
     if (w.front) w.piv.rotation.y = -d.steer * d.V.steer;
   }
+}
+
+// one vehicle merged into two geometries (paint, everything else) for cheap instancing of parked cars
+export function mergedVehicle(kind) {
+  const m = buildVehicle(kind, '#ffffff');
+  m.root.updateMatrixWorld(true);
+  const lists = { paint: [], fixed: [] };
+  m.root.traverse(o => {
+    if (!o.isMesh || o.material.map) return;
+    const g = (o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone()).applyMatrix4(o.matrixWorld);
+    const isPaint = o.material === m.parts.paint;
+    const c = isPaint ? new THREE.Color('#ffffff') : o.material.color;
+    const n = g.attributes.position.count, col = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; }
+    lists[isPaint ? 'paint' : 'fixed'].push({ p: g.attributes.position.array, n: g.attributes.normal.array, c: col });
+  });
+  const join = L => {
+    const total = L.reduce((a, x) => a + x.p.length, 0);
+    const P = new Float32Array(total), N = new Float32Array(total), C = new Float32Array(total);
+    let o = 0; for (const x of L) { P.set(x.p, o); N.set(x.n, o); C.set(x.c, o); o += x.p.length; }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(P, 3)); g.setAttribute('normal', new THREE.BufferAttribute(N, 3)); g.setAttribute('color', new THREE.BufferAttribute(C, 3));
+    return g;
+  };
+  return { paint: join(lists.paint), fixed: join(lists.fixed) };
 }

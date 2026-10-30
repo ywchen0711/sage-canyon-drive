@@ -66,3 +66,15 @@ label.chk input { width: 22px; height: 22px; }
   #touch .pedal { width: 78px; height: 96px; }
   #touch .pedal.gas { height: 116px; }
 }
+
+.row.col { flex-direction: column; }
+.row.col .vcard { flex: none; width: 100%; justify-content: flex-start; }
+#bigmap { position: fixed; inset: 0; z-index: 20; background: #cfc9b6; }
+#bigmapCanvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+.bmbar { position: absolute; left: 0; right: 0; top: 0; display: flex; gap: 8px; align-items: center; padding: 10px max(12px, env(safe-area-inset-left)); background: rgba(18,24,36,0.82); flex-wrap: wrap; }
+.bmbar button { width: auto; margin: 0; padding: 9px 14px; font-size: 15px; }
+.bmtitle { flex: 1; font-weight: bold; color: var(--accent); min-width: 160px; }
+#touch .tm { position: absolute; right: max(16px, env(safe-area-inset-right)); bottom: 170px; display: flex; gap: 10px; }
+#touch .tm button { width: 62px; height: 62px; font-size: 24px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+#touch .tm small { font-size: 10px; }
+@media (max-width: 600px) { #touch .tm { bottom: 140px; } #touch .tm button { width: 50px; height: 50px; font-size: 20px; } }

@@ -460,7 +460,7 @@ export const MISSIONS = [
 ];
 
 export const FREE = {
-  id: 'free', icon: '⭐', zh: '自由開車 + 找星星', en: 'Free drive + star hunt',
+  id: 'free', icon: '🌆', zh: '城市自由模式', en: 'Open city',
   dzh: '想去哪就去哪！社區裡藏了 20 顆星星，有些在峽谷裡。找齊它們！', den: 'Go anywhere you like! 20 stars are hidden around the neighbourhood, some down in the canyons. Find them all!',
 };
 // fixed star spots: road ends, canyon floors, the park, the school yard
