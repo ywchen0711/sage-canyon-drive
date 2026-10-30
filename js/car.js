@@ -17,15 +17,15 @@ export const VEHICLES = {
   pizza:    { zh: '小型掀背車', en: 'Hatchback', color: '#f08a24', L: 4.1, W: 1.8, vmax: 44, acc: 6.0, brake: 9.5, steer: 0.62, wb: 2.5, grip: 9.5, unlock: 0 },
 };
 
-const glassM = new THREE.MeshLambertMaterial({ color: '#2c4258', emissive: '#0c1622' });
-const tireM = new THREE.MeshLambertMaterial({ color: '#1a1a1a' });
-const hubM = new THREE.MeshLambertMaterial({ color: '#b8bcc0' });
+const glassM = new THREE.MeshStandardMaterial({ color: '#41607e', metalness: 0.55, roughness: 0.05 });
+const tireM = new THREE.MeshStandardMaterial({ color: '#1a1a1a', roughness: 0.9 });
+const hubM = new THREE.MeshStandardMaterial({ color: '#c8ccd0', metalness: 0.85, roughness: 0.3 });
 const darkM = new THREE.MeshLambertMaterial({ color: '#2a2a2a' });
-const chromeM = new THREE.MeshLambertMaterial({ color: '#d0d4d8' });
+const chromeM = new THREE.MeshStandardMaterial({ color: '#d8dce0', metalness: 0.9, roughness: 0.2 });
 
 function extrude(points, width, mat, bevel = 0.06) {
   const s = new THREE.Shape(points.map(p => new THREE.Vector2(p[0], p[1])));
-  const g = new THREE.ExtrudeGeometry(s, { depth: width - bevel * 2, bevelEnabled: bevel > 0, bevelSize: bevel, bevelThickness: bevel, bevelSegments: 2, curveSegments: 4 });
+  const g = new THREE.ExtrudeGeometry(s, { depth: width - bevel * 2, bevelEnabled: bevel > 0, bevelSize: bevel, bevelThickness: bevel, bevelSegments: 3, curveSegments: 6 });
   g.rotateY(-Math.PI / 2);
   g.translate(width / 2 - bevel, 0, 0);
   const m = new THREE.Mesh(g, mat); m.castShadow = true; return m;
@@ -69,7 +69,7 @@ function wheel(r, w) {
 
 export function buildVehicle(kind, color) {
   const V = VEHICLES[kind];
-  const paint = new THREE.MeshLambertMaterial({ color: color || V.color });
+  const paint = new THREE.MeshPhysicalMaterial({ color: color || V.color, metalness: 0.3, roughness: 0.38, clearcoat: 1, clearcoatRoughness: 0.08 });
   const root = new THREE.Group();     // positioned on the road
   const body = new THREE.Group();     // leans and pitches
   root.add(body);
@@ -176,6 +176,10 @@ export function buildVehicle(kind, color) {
     const t = box(0.3, 0.14, 0.05, tailM, s * (W / 2 - 0.25), hy + 0.12, -L / 2 - 0.01); body.add(t); parts.brake.push(t);
   }
   parts.tailM = tailM;
+  // licence plates
+  const plate = textPlane(0.52, 0.26, (g, w, h) => { g.fillStyle = '#f4f4f0'; g.fillRect(0, 0, w, h); g.strokeStyle = '#1b3a8a'; g.lineWidth = 6; g.strokeRect(3, 3, w - 6, h - 6); g.fillStyle = '#1b3a8a'; g.font = `bold ${h * 0.5}px Arial`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('SAGE ' + (1 + Math.floor(Math.random() * 9)) + 'JX', w / 2, h * 0.58); g.font = `${h * 0.18}px Arial`; g.fillStyle = '#c0282d'; g.fillText('California', w / 2, h * 0.2); }, 128);
+  const rp = plate.clone(); rp.position.set(0, hy - 0.12, -L / 2 - 0.04); rp.rotation.y = Math.PI; body.add(rp);
+  if (!['bus', 'garbage'].includes(kind)) { const fp = plate.clone(); fp.position.set(0, 0.42, L / 2 + 0.1); body.add(fp); }
   // bumpers
   if (!['bus', 'garbage'].includes(kind)) { body.add(box(W - 0.05, 0.22, 0.12, chromeM, 0, 0.42, L / 2 + 0.02)); body.add(box(W - 0.05, 0.22, 0.12, darkM, 0, 0.42, -L / 2 - 0.02)); }
   // wheels

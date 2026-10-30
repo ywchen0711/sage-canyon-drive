@@ -26,12 +26,12 @@ const walkTex = tex(256, 256, (g, w, h) => {
   g.fillStyle = 'rgba(90,85,75,0.55)';
   for (let k = 0; k <= 2; k++) { g.fillRect(0, k * 128 - 1, w, 3); g.fillRect(k * 128 - 1, 0, 3, h); }
 });
-const curbM = new THREE.MeshLambertMaterial({ color: '#b8b4aa', side: THREE.DoubleSide });
-const asphaltM = new THREE.MeshLambertMaterial({ map: asphaltTex, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2, side: THREE.DoubleSide });
-const walkM = new THREE.MeshLambertMaterial({ map: walkTex, side: THREE.DoubleSide });
-const whiteM = new THREE.MeshLambertMaterial({ color: '#f2f2ee', polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4, side: THREE.DoubleSide });
-const yellowM = new THREE.MeshLambertMaterial({ color: '#f0c43a', polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4, side: THREE.DoubleSide });
-const medianM = new THREE.MeshLambertMaterial({ color: '#6f9a4e', side: THREE.DoubleSide });
+const curbM = new THREE.MeshStandardMaterial({ roughness: 0.9, color: '#b8b4aa', side: THREE.DoubleSide });
+const asphaltM = new THREE.MeshStandardMaterial({ roughness: 0.92, map: asphaltTex, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2, side: THREE.DoubleSide });
+const walkM = new THREE.MeshStandardMaterial({ roughness: 0.95, map: walkTex, side: THREE.DoubleSide });
+const whiteM = new THREE.MeshStandardMaterial({ roughness: 0.7, color: '#f2f2ee', polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4, side: THREE.DoubleSide });
+const yellowM = new THREE.MeshStandardMaterial({ roughness: 0.7, color: '#f0c43a', polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4, side: THREE.DoubleSide });
+const medianM = new THREE.MeshStandardMaterial({ roughness: 1, color: '#6f9a4e', side: THREE.DoubleSide });
 
 // geometry builder that collects triangles with world-space UVs
 function Builder() {

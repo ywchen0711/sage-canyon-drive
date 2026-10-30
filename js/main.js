@@ -6,6 +6,7 @@ import { buildWorld, buildSky, addTempBox, addTempCircle, clearTemp } from './wo
 import { createCity, restorePermanent, PRICES, STARTER, HOME_MISSIONS } from './city.js';
 import { Walker } from './onfoot.js';
 import { createBigMap } from './bigmap.js';
+import { makeEnv, makeComposer } from './gfx.js';
 import { VEHICLES, buildVehicle, Driver, poseVehicle } from './car.js';
 import { createTraffic, updateSignals, lightFor, buildPerson, animPerson, buildDog, AICar } from './traffic.js';
 import { MISSIONS, FREE, STARS, SCHOOL_DROP, kerb, addr } from './missions.js';
@@ -33,8 +34,8 @@ const hudC = document.getElementById('hud'), hud = hudC.getContext('2d');
 
 const hemi = new THREE.HemisphereLight('#cfe6ff', '#8a7a5a', 0.9); scene.add(hemi);
 const sun = new THREE.DirectionalLight('#fff4e0', 2.2);
-sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
-Object.assign(sun.shadow.camera, { left: -70, right: 70, top: 70, bottom: -70, near: 1, far: 400 });
+sun.castShadow = true; sun.shadow.mapSize.set(save.quality ? 4096 : 1024, save.quality ? 4096 : 1024);
+Object.assign(sun.shadow.camera, { left: -60, right: 60, top: 60, bottom: -60, near: 1, far: 400 });
 sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.04;
 scene.add(sun, sun.target);
 scene.fog = new THREE.Fog('#cfe3f1', 300, 2600);
@@ -43,14 +44,15 @@ const sky = buildSky(scene);
 const loading = document.getElementById('loading');
 const groundTex = await new Promise(res => new THREE.TextureLoader().load('assets/ground.jpg', t => { t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = renderer.capabilities.getMaxAnisotropy(); res(t); }));
 const W = buildWorld(scene, groundTex);
+const fx = makeComposer(renderer, scene, camera);
 let traffic = createTraffic(scene, [8, 16, 26][save.traffic], [12, 26, 40][save.traffic]);
 
 // ---------- time of day ----------
 const TODS = {
-  morning: { sun: [-0.8, 0.35, -0.3], sunC: '#ffd9a8', sunI: 2.0, hemi: ['#d8e4f0', '#8a7a5a', 0.75], top: '#5d97d6', bot: '#f2dcc0', fog: '#e9dcc8', exp: 1.0, lamps: 0, glow: 0 },
-  day: { sun: [0.35, 0.85, 0.4], sunC: '#fff4e0', sunI: 2.4, hemi: ['#cfe6ff', '#8a7a5a', 0.9], top: '#3f86d6', bot: '#cfe3f1', fog: '#cfe3f1', exp: 1.05, lamps: 0, glow: 0 },
-  sunset: { sun: [0.85, 0.16, 0.25], sunC: '#ffab6b', sunI: 1.9, hemi: ['#e0b8a8', '#5a4a40', 0.65], top: '#41548a', bot: '#ffb37a', fog: '#e8a882', exp: 1.0, lamps: 0.5, glow: 0.4 },
-  night: { sun: [-0.3, 0.6, 0.5], sunC: '#9fb4ff', sunI: 0.28, hemi: ['#4a5a80', '#1a1a22', 0.35], top: '#060a1a', bot: '#1c2440', fog: '#141a2e', exp: 1.1, lamps: 1, glow: 1 },
+  morning: { sun: [-0.8, 0.35, -0.3], sunC: '#ffd9a8', sunI: 2.6, hemi: ['#d8e4f0', '#8a7a5a', 0.35], top: '#5d97d6', bot: '#f2dcc0', fog: '#e9dcc8', exp: 1.0, lamps: 0, glow: 0 },
+  day: { sun: [0.45, 0.75, 0.45], sunC: '#fff4e0', sunI: 3.0, hemi: ['#cfe6ff', '#8a7a5a', 0.4], top: '#3f86d6', bot: '#cfe3f1', fog: '#cfe3f1', exp: 1.05, lamps: 0, glow: 0 },
+  sunset: { sun: [0.85, 0.16, 0.25], sunC: '#ffab6b', sunI: 2.6, hemi: ['#e0b8a8', '#5a4a40', 0.3], top: '#41548a', bot: '#ffb37a', fog: '#e8a882', exp: 1.0, lamps: 0.5, glow: 0.4 },
+  night: { sun: [-0.3, 0.6, 0.5], sunC: '#9fb4ff', sunI: 0.35, hemi: ['#4a5a80', '#1a1a22', 0.25], top: '#060a1a', bot: '#1c2440', fog: '#141a2e', exp: 1.1, lamps: 1, glow: 1 },
 };
 let tod = 'day';
 function setTOD(name) {
@@ -64,9 +66,14 @@ function setTOD(name) {
   renderer.toneMappingExposure = c.exp;
   W.furn.lampHeads.color.set(c.lamps ? '#fff2c0' : '#d6d6c8');
   W.furn.pools.material.opacity = c.lamps * 0.75;
-  for (const m of [W.houses.walls, W.houses.fronts]) m.material.emissive.set(c.glow ? '#ffffff' : '#000000'), m.material.emissiveIntensity = c.glow * 0.55;
+  for (const m of [W.houses.walls, W.houses.fronts, W.houses.garages]) m.material.emissive.set(c.glow ? '#ffffff' : '#000000'), m.material.emissiveIntensity = c.glow * 0.55;
   sky.cloudMat.opacity = name === 'night' ? 0.15 : 1;
   stars3d.visible = name === 'night';
+  scene.environment = makeEnv(renderer, sky.sky);
+  // matte surfaces take less from the sky so shadows keep their depth; paint and glass stay shiny
+  scene.traverse(o => { const m = o.material; if (m && m.isMeshStandardMaterial && !m.isMeshPhysicalMaterial && m.metalness < 0.5) m.envMapIntensity = name === 'night' ? 0.25 : 0.42; });
+  fx.bloom.strength = name === 'night' ? 0.85 : name === 'sunset' ? 0.35 : 0.18;
+  fx.grade.uniforms.warm.value = name === 'sunset' ? 0.05 : name === 'night' ? -0.02 : 0.025;
   headOn = name === 'night' || name === 'sunset';
 }
 // night sky
@@ -568,7 +575,7 @@ function updateGPS(dt) {
 const camState = { init: false, pos: new THREE.Vector3(), look: new THREE.Vector3(), yaw: 0 };
 // keep the camera out of houses: pull it in front of the first wall between the car and the camera
 const camRay = new THREE.Raycaster();
-const camBlockers = [W.houses.walls, W.houses.fronts, W.houses.roofs];
+const camBlockers = [W.houses.walls, W.houses.fronts, W.houses.garages, W.houses.roofs];
 function unblock(look, pos) {
   const dir = pos.clone().sub(look), len = dir.length();
   if (len < 0.5) return pos;
@@ -892,6 +899,7 @@ function menuCam() { setTOD('sunset'); }
 function resize() {
   const w = innerWidth, h = innerHeight;
   renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+  fx.composer.setSize(w, h);
   hudC.width = w * devicePixelRatio; hudC.height = h * devicePixelRatio;
 }
 addEventListener('resize', resize); resize();
@@ -969,7 +977,7 @@ function frame(now) {
       sun.position.set(cx + 150, 150, cz + 50); sun.target.position.set(cx, 0, cz);
     }
   }
-  renderer.render(scene, camera);
+  if (save.quality) fx.composer.render(); else renderer.render(scene, camera);
   drawHUD(hud, hudC.width, hudC.height, G.mode === 'drive' ? {
     dpr: devicePixelRatio, player, street: G.street, limit: G.limit || 25, nav: G.nav,
     mission: G.mission ? T(G.mission.zh, G.mission.en) : null, clockText: G.clockText, clockWarn: G.clockWarn, passenger: G.passenger,
