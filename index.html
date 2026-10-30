@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Sage Canyon 開車趣 Sage Canyon Drive</title>
+<meta name="description" content="A driving game on the real streets around Sage Canyon School, San Diego.">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<canvas id="view"></canvas>
+<canvas id="hud"></canvas>
+
+<div id="loading"><div class="spin"></div><div>Loading Sage Canyon…</div></div>
+
+<div id="menu" class="screen hidden">
+  <div class="panel title">
+    <div class="logo">🚗</div>
+    <h1 data-zh="Sage Canyon 開車趣" data-en="Sage Canyon Drive">Sage Canyon 開車趣</h1>
+    <p class="sub" data-zh="在 Sage Canyon School 附近的真實街道上開車！" data-en="Drive the real streets around Sage Canyon School!">在 Sage Canyon School 附近的真實街道上開車！</p>
+    <div class="stars" id="starsTotal"></div>
+    <button id="bMissions" class="big" data-zh="🗺️ 任務" data-en="🗺️ Missions">🗺️ 任務</button>
+    <button id="bFree" class="big" data-zh="⭐ 自由開車" data-en="⭐ Free drive">⭐ 自由開車</button>
+    <button id="bSettings" data-zh="⚙️ 設定（我的家、語言）" data-en="⚙️ Settings (home, language)">⚙️ 設定</button>
+    <p class="keys" data-zh="W/↑ 油門・S/↓ 煞車倒車・A D 轉彎・空白鍵 手煞車・H 喇叭・C 視角・L 車燈・R 回到路上・Esc 暫停" data-en="W/↑ throttle · S/↓ brake/reverse · A D steer · Space handbrake · H horn · C camera · L lights · R back to road · Esc pause"></p>
+  </div>
+</div>
+
+<div id="missions" class="screen hidden">
+  <div class="panel wide">
+    <h2 data-zh="任務" data-en="Missions">任務</h2>
+    <div id="mlist" class="grid"></div>
+    <button class="back" data-zh="← 返回" data-en="← Back">← 返回</button>
+  </div>
+</div>
+
+<div id="free" class="screen hidden">
+  <div class="panel">
+    <h2 data-zh="自由開車" data-en="Free drive">自由開車</h2>
+    <p id="freeFound"></p>
+    <h3 data-zh="車子" data-en="Vehicle">車子</h3>
+    <div id="vlist" class="row"></div>
+    <h3 data-zh="時間" data-en="Time of day">時間</h3>
+    <div id="tlist" class="row"></div>
+    <button id="bGo" class="big" data-zh="出發！" data-en="Let’s go!">出發！</button>
+    <button class="back" data-zh="← 返回" data-en="← Back">← 返回</button>
+  </div>
+</div>
+
+<div id="settings" class="screen hidden">
+  <div class="panel">
+    <h2 data-zh="設定" data-en="Settings">設定</h2>
+    <label><span data-zh="🏠 我的家" data-en="🏠 My home">🏠 我的家</span><select id="homeSel"></select></label>
+    <label><span data-zh="語言" data-en="Language">語言</span><select id="langSel"><option value="zh">中文</option><option value="en">English</option></select></label>
+    <label><span data-zh="車流量" data-en="Traffic">車流量</span><select id="trafficSel"><option value="0" data-zh="少" data-en="Light">少</option><option value="1" data-zh="中" data-en="Normal">中</option><option value="2" data-zh="多" data-en="Busy">多</option></select></label>
+    <label><span data-zh="畫質" data-en="Graphics">畫質</span><select id="qualSel"><option value="0" data-zh="流暢" data-en="Fast">流暢</option><option value="1" data-zh="漂亮" data-en="Pretty">漂亮</option></select></label>
+    <label class="chk"><input type="checkbox" id="tiltChk"><span data-zh="📱 傾斜 iPad 轉方向盤" data-en="📱 Tilt the iPad to steer">📱 傾斜 iPad 轉方向盤</span></label>
+    <label class="chk"><input type="checkbox" id="muteChk"><span data-zh="🔇 靜音" data-en="🔇 Mute">🔇 靜音</span></label>
+    <p class="note" data-zh="街道照 Sage Canyon School（San Diego, Carmel Valley）附近的真實地圖描出來，門牌號碼是遊戲裡編的。" data-en="Streets are traced from a real map of the area around Sage Canyon School (Carmel Valley, San Diego). House numbers are made up for the game."></p>
+    <button class="back" data-zh="← 返回" data-en="← Back">← 返回</button>
+  </div>
+</div>
+
+<div id="result" class="screen hidden">
+  <div class="panel">
+    <h2 class="rtitle"></h2>
+    <div class="rstars"></div>
+    <div class="rquote"></div>
+    <div class="rlines"></div>
+    <button id="rnext" class="big" data-zh="下一個任務 →" data-en="Next mission →">下一個任務 →</button>
+    <button id="rretry" data-zh="再玩一次" data-en="Try again">再玩一次</button>
+    <button id="rmenu" data-zh="回選單" data-en="Menu">回選單</button>
+  </div>
+</div>
+
+<div id="pause" class="screen hidden">
+  <div class="panel">
+    <h2 data-zh="暫停" data-en="Paused">暫停</h2>
+    <button id="presume" class="big" data-zh="繼續" data-en="Resume">繼續</button>
+    <button id="prestart" data-zh="重新開始" data-en="Restart">重新開始</button>
+    <button id="pmenu" data-zh="回選單" data-en="Menu">回選單</button>
+  </div>
+</div>
+
+<div id="hudbar" class="hidden"></div>
+<div id="touch" class="hidden">
+  <div class="tl"><button id="tLeft">◀</button><button id="tRight">▶</button></div>
+  <div class="tr"><button id="tBrake" class="pedal">⏪<small>BRAKE</small></button><button id="tGas" class="pedal gas">⏩<small>GAS</small></button></div>
+  <div class="tt"><button id="tPause">⏸</button><button id="tCam">🎥</button><button id="tReset">↺</button><button id="tHorn">📯</button><button id="tHand">🅿️</button></div>
+</div>
+
+<script type="module" src="js/main.js?v=1"></script>
+</body>
+</html>
